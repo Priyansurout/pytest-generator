@@ -1,15 +1,3 @@
-"""
-TestGen - Optimized Pytest Test Case Generator CLI
-Generates pytest tests from Python functions using local AI model
-
-Performance Optimizations:
-- Smart GPU/CPU detection
-- Dynamic token allocation
-- Optimized thread usage
-- Aggressive stop sequences
-- Efficient batch processing
-"""
-
 import argparse
 import ast
 import os
@@ -19,9 +7,17 @@ import time
 import platform
 import subprocess
 import multiprocessing
+import atexit
+import gc
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from llama_cpp import Llama
+
+try:
+    import yaml
+    HAS_YAML = True
+except ImportError:
+    HAS_YAML = False
 
 
 class Colors:
@@ -118,17 +114,81 @@ class HardwareDetector:
 
 
 class Config:
-    """Optimized configuration settings"""
+    """Configuration settings - loaded from config.yaml if available"""
+    
+    # Default values (used if no config.yaml)
     MODEL_REPO = "Priyansu19/pytest-generator-v4-GGUF"
     MODEL_FILE_8B = "pytest-v4-q4_k_m.gguf"
     MODEL_FILE_FP16 = "pytest-v4-f16.gguf"
+    N_CTX = 2048
+    MIN_TOKENS = 300
+    MAX_TOKENS = 1200
+    TEMPERATURE = 0.2
+    BATCH_SIZE = 512
+    UNLOAD_BETWEEN_FILES = True
+    DEFAULT_OUTPUT_DIR = "./generated_tests/"
     
-    # Context and generation settings
-    N_CTX = 2048          # Context window
-    MIN_TOKENS = 300      # Minimum tokens per test
-    MAX_TOKENS = 1200     # Maximum tokens per test
-    TEMPERATURE = 0.2     # Lower = faster + more deterministic
-    BATCH_SIZE = 512      # Larger batches = faster processing
+    @classmethod
+    def load_from_file(cls, config_path: str = "config.yaml") -> None:
+        """Load configuration from YAML file"""
+        if not HAS_YAML:
+            print(f"{Colors.WARNING}⚠️  PyYAML not installed. Using default config.{Colors.ENDC}")
+            print(f"{Colors.WARNING}   Install with: pip install pyyaml{Colors.ENDC}\n")
+            return
+        
+        if not os.path.exists(config_path):
+            print(f"{Colors.WARNING}⚠️  Config file not found: {config_path}{Colors.ENDC}")
+            print(f"{Colors.WARNING}   Using default configuration{Colors.ENDC}\n")
+            return
+        
+        try:
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+            
+            # Load model settings
+            if 'model' in config:
+                cls.MODEL_REPO = config['model'].get('repo', cls.MODEL_REPO)
+                cls.MODEL_FILE_8B = config['model'].get('file_8b_q4', cls.MODEL_FILE_8B)
+                cls.MODEL_FILE_FP16 = config['model'].get('file_8b_fp16', cls.MODEL_FILE_FP16)
+            
+            # Load generation settings
+            if 'generation' in config:
+                cls.N_CTX = config['generation'].get('n_ctx', cls.N_CTX)
+                cls.MIN_TOKENS = config['generation'].get('min_tokens', cls.MIN_TOKENS)
+                cls.MAX_TOKENS = config['generation'].get('max_tokens', cls.MAX_TOKENS)
+                cls.TEMPERATURE = config['generation'].get('temperature', cls.TEMPERATURE)
+                cls.BATCH_SIZE = config['generation'].get('batch_size', cls.BATCH_SIZE)
+            
+            # Load hardware settings
+            if 'hardware' in config:
+                cls._hw_threads = config['hardware'].get('n_threads', -1)
+                cls._hw_gpu_layers = config['hardware'].get('n_gpu_layers', -1)
+                cls.UNLOAD_BETWEEN_FILES = config['hardware'].get('unload_between_files', True)
+            
+            # Load output settings
+            if 'output' in config:
+                cls.DEFAULT_OUTPUT_DIR = config['output'].get('default_dir', cls.DEFAULT_OUTPUT_DIR)
+            
+            print(f"{Colors.GREEN}✅ Loaded configuration from {config_path}{Colors.ENDC}\n")
+            
+        except Exception as e:
+            print(f"{Colors.WARNING}⚠️  Error loading config: {e}{Colors.ENDC}")
+            print(f"{Colors.WARNING}   Using default configuration{Colors.ENDC}\n")
+    
+    @classmethod
+    def get_hw_threads(cls) -> int:
+        """Get hardware thread count (from config or auto-detect)"""
+        if hasattr(cls, '_hw_threads') and cls._hw_threads != -1:
+            return cls._hw_threads
+        return HardwareDetector.get_cpu_threads()
+    
+    @classmethod
+    def get_hw_gpu_layers(cls) -> int:
+        """Get GPU layers (from config or auto-detect)"""
+        if hasattr(cls, '_hw_gpu_layers') and cls._hw_gpu_layers != -1:
+            return cls._hw_gpu_layers
+        layers, _ = HardwareDetector.get_gpu_config()
+        return layers
 
 
 class TokenEstimator:
@@ -229,14 +289,34 @@ class TestGenerator:
         self.model_path = model_path
         self.verbose = verbose
         self._load_model()
+        
+        # Register cleanup on exit
+        atexit.register(self.cleanup)
+    
+    def cleanup(self):
+        """Explicitly free model memory"""
+        if self.model is not None:
+            if self.verbose:
+                print(f"{Colors.BLUE}Unloading model...{Colors.ENDC}")
+            
+            # Delete model reference
+            del self.model
+            self.model = None
+            
+            # Force garbage collection
+            gc.collect()
+            
+            if self.verbose:
+                print(f"{Colors.GREEN}✅ Model unloaded{Colors.ENDC}")
     
     def _load_model(self):
         """Load the GGUF model with optimal settings"""
         print(f"{Colors.BLUE}Loading model from {os.path.basename(self.model_path)}...{Colors.ENDC}")
         
-        # Get hardware config
-        n_threads = HardwareDetector.get_cpu_threads()
-        n_gpu_layers, device = HardwareDetector.get_gpu_config()
+        # Get hardware config (from Config or auto-detect)
+        n_threads = Config.get_hw_threads()
+        n_gpu_layers = Config.get_hw_gpu_layers()
+        _, device = HardwareDetector.get_gpu_config()
         
         try:
             self.model = Llama(
@@ -531,6 +611,18 @@ def process_directory(dir_path: str, generator: TestGenerator, output_dir: str, 
         
         if result:
             success_count += 1
+        
+        # Memory management: unload model between files if configured
+        if Config.UNLOAD_BETWEEN_FILES and i < len(py_files):
+            if verbose:
+                print(f"\n{Colors.BLUE}Cleaning up memory before next file...{Colors.ENDC}")
+            
+            # Cleanup and reload
+            generator.cleanup()
+            gc.collect()
+            
+            # Reload for next file
+            generator._load_model()
     
     # Final summary
     print(f"\n{Colors.GREEN}{Colors.BOLD}{'='*60}")
@@ -580,11 +672,13 @@ Examples:
   %(prog)s ./src/ -o ./tests/               # Process all files in src/
   %(prog)s math.py --model custom.gguf      # Use custom model
   %(prog)s app.py -v                        # Verbose mode
+  %(prog)s app.py --config custom.yaml      # Use custom config file
 
 Performance Tips:
   • Mac M2/M3/M4: Automatically uses Metal GPU (fast!)
   • NVIDIA GPU: Automatically detected (fast!)
   • CPU only: Consider using smaller 3B model for speed
+  • Create config.yaml to customize settings
         """
     )
     
@@ -595,8 +689,8 @@ Performance Tips:
     
     parser.add_argument(
         '-o', '--output',
-        default='./generated_tests/',
-        help='Output directory for test files (default: ./generated_tests/)'
+        default=None,  # Will use Config.DEFAULT_OUTPUT_DIR if None
+        help='Output directory for test files (default: from config or ./generated_tests/)'
     )
     
     parser.add_argument(
@@ -617,6 +711,18 @@ Performance Tips:
         help='Use FP16 model instead of Q4 (higher quality, slower)'
     )
     
+    parser.add_argument(
+        '--config',
+        default='config.yaml',
+        help='Path to config file (default: config.yaml)'
+    )
+    
+    parser.add_argument(
+        '--no-cleanup',
+        action='store_true',
+        help='Disable memory cleanup between files in batch mode'
+    )
+    
     args = parser.parse_args()
     
     # Print header
@@ -626,11 +732,19 @@ Performance Tips:
     print("="*60)
     print(f"{Colors.ENDC}\n")
     
+    # Load configuration from file
+    Config.load_from_file(args.config)
+    
+    # Override config with command-line args
+    if args.no_cleanup:
+        Config.UNLOAD_BETWEEN_FILES = False
+    
     # Show system info
     HardwareDetector.print_system_info()
     
-    # Create output directory
-    os.makedirs(args.output, exist_ok=True)
+    # Determine output directory
+    output_dir = args.output if args.output else Config.DEFAULT_OUTPUT_DIR
+    os.makedirs(output_dir, exist_ok=True)
     
     # Get model path
     if args.model:
@@ -655,19 +769,23 @@ Performance Tips:
     
     start_time = time.time()
     
-    if target_path.is_file():
-        process_file(str(target_path), generator, args.output, args.verbose)
-    elif target_path.is_dir():
-        process_directory(str(target_path), generator, args.output, args.verbose)
-    else:
-        print(f"{Colors.FAIL}❌ Invalid target: {args.target}{Colors.ENDC}")
-        sys.exit(1)
+    try:
+        if target_path.is_file():
+            process_file(str(target_path), generator, output_dir, args.verbose)
+        elif target_path.is_dir():
+            process_directory(str(target_path), generator, output_dir, args.verbose)
+        else:
+            print(f"{Colors.FAIL}❌ Invalid target: {args.target}{Colors.ENDC}")
+            sys.exit(1)
+    finally:
+        # Ensure cleanup happens
+        generator.cleanup()
     
     total_time = time.time() - start_time
     
     # Final message
     print(f"\n{Colors.GREEN}{Colors.BOLD}✨ All done!{Colors.ENDC}")
-    print(f"{Colors.GREEN}Tests saved to: {args.output}{Colors.ENDC}")
+    print(f"{Colors.GREEN}Tests saved to: {output_dir}{Colors.ENDC}")
     print(f"{Colors.CYAN}Total time: {total_time:.1f}s{Colors.ENDC}\n")
 
 

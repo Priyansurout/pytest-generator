@@ -1,0 +1,72 @@
+# TestGen Configuration File
+# Customize model and generation settings
+
+model:
+  # HuggingFace repository
+  repo: "Priyansu19/pytest-generator-v4-GGUF"
+  
+  # Model files (Q4 recommended for most use cases)
+  file_8b_q4: "pytest-v4-q4_k_m.gguf"
+  file_8b_fp16: "pytest-v4-f16.gguf"
+  
+  # Use FP16 for higher quality (slower, 16GB)
+  use_fp16: false
+
+generation:
+  # Context window (1024-4096)
+  # Lower = faster, less memory
+  # Higher = better for complex functions
+  n_ctx: 2048
+  
+  # Token limits per test
+  min_tokens: 300    # Minimum for simple functions
+  max_tokens: 1200   # Maximum for complex functions
+  
+  # Temperature (0.0-1.0)
+  # Lower = more deterministic
+  # Higher = more creative
+  temperature: 0.1
+  
+  # Batch size (128-512)
+  # Higher = faster (if enough RAM)
+  batch_size: 512
+
+hardware:
+  # CPU threads (-1 = auto-detect optimal)
+  # Set to specific number to override
+  n_threads: -1
+  
+  # GPU layers (-1 = auto-detect, 0 = CPU only)
+  # Set to 35 to force GPU usage
+  # Set to 0 to force CPU usage
+  n_gpu_layers: -1
+  
+  # Memory management
+  # Unload model after each file in batch mode
+  unload_between_files: true
+
+output:
+  # Default output directory
+  default_dir: "./generated_tests/"
+  
+  # Add timestamps to filenames
+  add_timestamp: false
+  
+  # Overwrite existing test files
+  overwrite: true
+
+advanced:
+  # Stop sequences (prevent over-generation)
+  stop_sequences:
+    - "```"
+    - "<|im_end|>"
+    - "\n\n\n\n"
+    - "# =========="
+    - "\ndef test_test_"
+    - "\nclass "
+  
+  # Enable verbose logging
+  verbose: false
+  
+  # Maximum files to process in batch (-1 = unlimited)
+  max_batch_files: -1
