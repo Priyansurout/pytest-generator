@@ -1,0 +1,2128 @@
+question,answer,context,reasoning
+"def generate_thumbnail(
+    image_bytes: bytes,
+    size: Tuple[int, int],
+    *,
+    preserve_aspect: bool = True,
+    watermark: Optional[bytes] = None,
+    storage_client: Any,
+) -> bytes:
+    """"""
+    Produce a thumbnail from raw image data, optionally apply a watermark, and upload it to remote storage.
+
+    Args:
+        image_bytes (bytes): Raw binary image data (e.g., JPEG, PNG). Must be non‑empty.
+        size (Tuple[int, int]): Desired ``(width, height)`` in pixels for the thumbnail. Both dimensions must be positive.
+        preserve_aspect (bool, optional): If ``True`` the image is resized while maintaining its original aspect ratio;
+            the resulting thumbnail may be smaller than ``size`` in one dimension. Defaults to ``True``.
+        watermark (Optional[bytes], optional): Optional PNG‑encoded watermark image to be composited on top of the thumbnail.
+            If provided, it will be scaled to fit within the thumbnail bounds. Defaults to ``None``.
+        storage_client (Any): Object exposing an ``upload(key: str, data: bytes) -> str`` method that stores the
+            thumbnail and returns a URI. May raise ``StorageError`` on failure.
+
+    Returns:
+        bytes: The final thumbnail image encoded as PNG bytes ready for downstream consumption.
+
+    Raises:
+        TypeError: If ``image_bytes`` is not ``bytes`` or ``size`` is not a ``Tuple[int, int]``.
+        ValueError: If any dimension in ``size`` is non‑positive.
+        OSError: If the Pillow library fails to open or process the image data.
+        StorageError: Propagated from ``storage_client.upload`` when the upload cannot be completed.
+
+    # Dependencies: PIL.Image.open(), PIL.Image.resize(), storage_client.upload()
+    """"""","import pytest
+from unittest.mock import Mock, patch, call
+
+# Adjust the import to the actual module where ``generate_thumbnail`` is defined.
+from module_under_test import generate_thumbnail, StorageError
+
+
+@pytest.mark.parametrize(
+    ""preserve_aspect, watermark, size"",
+    [
+        # Preserve aspect, no watermark
+        (True, None, (100, 80)),
+        # Do not preserve aspect, no watermark
+        (False, None, (50, 50)),
+        # Preserve aspect with watermark
+        (True, b""wm_bytes"", (120, 120)),
+    ],
+)
+@patch(""module_under_test.Image.open"")
+def test_generate_thumbnail_success(mock_open, preserve_aspect, watermark, size):
+    """"""
+    Verify successful thumbnail generation, optional watermark handling,
+    and that the result is uploaded via ``storage_client.upload``.
+    """"""
+    # Mock the main image object
+    main_image = Mock()
+    main_image.resize.return_value = main_image
+    main_image.tobytes.return_value = b""thumb_bytes""
+
+    # If a watermark is supplied, the function will open it as well.
+    if watermark is not None:
+        watermark_image = Mock()
+        watermark_image.resize.return_value = watermark_image
+        mock_open.side_effect = [main_image, watermark_image]
+    else:
+        mock_open.return_value = main_image
+
+    # Prepare a mock storage client
+    storage_client = Mock()
+    storage_client.upload.return_value = ""s3://bucket/thumbnail.png""
+
+    result = generate_thumbnail(
+        image_bytes=b""original_image_bytes"",
+        size=size,
+        preserve_aspect=preserve_aspect,
+        watermark=watermark,
+        storage_client=storage_client,
+    )
+
+    # The function should return the bytes produced by the mocked image processing.
+    assert isinstance(result, bytes)
+    assert result == b""thumb_bytes""
+
+    # Image.open must be called with the original image bytes.
+    mock_open.assert_any_call(b""original_image_bytes"")
+    if watermark is not None:
+        # Second call is for the watermark bytes.
+        mock_open.assert_any_call(watermark)
+
+    # The main image should be resized at least once.
+    assert main_image.resize.called
+    # Verify resize was called with a tuple of two positive ints.
+    resize_args = main_image.resize.call_args[0][0]
+    assert isinstance(resize_args, tuple) and len(resize_args) == 2
+    assert all(isinstance(v, int) and v > 0 for v in resize_args)
+
+    # Upload must be invoked exactly once with a key and the thumbnail bytes.
+    storage_client.upload.assert_called_once()
+    upload_call_args = storage_client.upload.call_args[0]
+    assert isinstance(upload_call_args[0], str)  # key
+    assert upload_call_args[1] == b""thumb_bytes""
+
+
+@pytest.mark.parametrize(
+    ""image_bytes, size, preserve_aspect, watermark, mock_setup, expected_exc"",
+    [
+        # Type error: image_bytes not bytes
+        (""not_bytes"", (100, 100), True, None, None, TypeError),
+        # Type error: size not a tuple
+        (b""bytes"", [100, 100], True, None, None, TypeError),
+        # Value error: non‑positive width
+        (b""bytes"", (0, 100), True, None, None, ValueError),
+        # Value error: non‑positive height
+        (b""bytes"", (100, -5), False, None, None, ValueError),
+        # OSError from Pillow when opening image fails
+        (
+            b""bytes"",
+            (100, 100),
+            True,
+            None,
+            lambda mock_open, _: mock_open.side_effect = OSError(""cannot open""),
+            OSError,
+        ),
+        # StorageError propagated from upload
+        (
+            b""bytes"",
+            (100, 100),
+            True,
+            None,
+            lambda mock_open, storage: storage.upload.side_effect = StorageError(""upload fail""),
+            StorageError,
+        ),
+    ],
+)
+@patch(""module_under_test.Image.open"")
+def test_generate_thumbnail_exceptions(
+    mock_open,
+    image_bytes,
+    size,
+    preserve_aspect,
+    watermark,
+    mock_setup,
+    expected_exc,
+):
+    """"""
+    Ensure that documented exceptions are raised for invalid inputs
+    and for failures in external dependencies.
+    """"""
+    # Configure the main image mock for the success path (if needed)
+    main_image = Mock()
+    main_image.resize.return_value = main_image
+    main_image.tobytes.return_value = b""thumb_bytes""
+    mock_open.return_value = main_image
+
+    # Mock storage client
+    storage_client = Mock()
+    storage_client.upload.return_value = ""s3://bucket/thumbnail.png""
+
+    # Apply per‑case mock configuration if provided
+    if mock_setup is not None:
+        mock_setup(mock_open, storage_client)
+
+    with pytest.raises(expected_exc):
+        generate_thumbnail(
+            image_bytes=image_bytes,
+            size=size,
+            preserve_aspect=preserve_aspect,
+            watermark=watermark,
+            storage_client=storage_client,
+        )
+
+    # When an exception occurs before upload, ensure upload is not called.
+    if expected_exc in (TypeError, ValueError, OSError):
+        storage_client.upload.assert_not_called()
+    # When the upload itself raises StorageError, it should have been attempted.
+    if expected_exc is StorageError:
+        storage_client.upload.assert_called_once()",,
+"def convert_currency(amount: Decimal, from_currency: str, to_currency: str, *, exchange_service: Any) -> Decimal:
+    """"""
+    Convert a monetary amount from one currency to another using a live exchange‑rate service.
+
+    Args:
+        amount (Decimal): The monetary value to convert. Must be a non‑negative Decimal.
+        from_currency (str): ISO 4217 currency code of the source currency (e.g., ``""USD""``).
+        to_currency (str): ISO 4217 currency code of the target currency (e.g., ``""EUR""``).
+        exchange_service (Any): An external service object exposing a ``get_rate(src: str, dst: str) -> Decimal``
+            method that returns the current exchange rate from ``src`` to ``dst``. The method may raise
+            ``ConnectionError`` on network failures.
+
+    Returns:
+        Decimal: The converted amount rounded to two decimal places using ``ROUND_HALF_EVEN``.
+
+    Raises:
+        ValueError: If ``amount`` is negative, or if ``from_currency`` or ``to_currency`` are not three‑letter
+            uppercase codes.
+        KeyError: If the ``exchange_service`` does not provide a rate for the requested currency pair.
+        ConnectionError: If the ``exchange_service`` fails to retrieve the rate due to network issues.
+        TypeError: If ``amount`` is not a ``Decimal`` instance.
+
+    # Dependencies: exchange_service.get_rate(src: str, dst: str) -> Decimal, logger.warning(msg: str) -> None
+    """"""","import pytest
+from unittest.mock import Mock, patch
+from decimal import Decimal, ROUND_HALF_EVEN
+
+from my_module import convert_currency
+
+
+@pytest.mark.parametrize(
+    ""amount,from_cur,to_cur,rate,expected"",
+    [
+        (
+            Decimal(""100""),
+            ""USD"",
+            ""EUR"",
+            Decimal(""0.85""),
+            Decimal(""85.00""),
+        ),
+        (
+            Decimal(""0""),
+            ""JPY"",
+            ""USD"",
+            Decimal(""0.0091""),
+            Decimal(""0.00""),
+        ),
+        (
+            Decimal(""123.456""),
+            ""GBP"",
+            ""CAD"",
+            Decimal(""1.2345""),
+            (Decimal(""123.456"") * Decimal(""1.2345"")).quantize(
+                Decimal(""0.01""), rounding=ROUND_HALF_EVEN
+            ),
+        ),
+    ],
+)
+def test_convert_currency_success(amount, from_cur, to_cur, rate, expected):
+    """"""Successful conversions with proper rounding.""""""
+    exchange_service = Mock()
+    exchange_service.get_rate.return_value = rate
+
+    with patch(""my_module.logger"") as mock_logger:
+        result = convert_currency(
+            amount, from_cur, to_cur, exchange_service=exchange_service
+        )
+        assert result == expected
+        # Verify the service was called with correct parameters
+        exchange_service.get_rate.assert_called_once_with(from_cur, to_cur)
+        # No warning should be emitted on success
+        mock_logger.warning.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ""amount,from_cur,to_cur,expected_exc"",
+    [
+        # Negative amount triggers ValueError
+        (Decimal(""-10""), ""USD"", ""EUR"", ValueError),
+        # Invalid source currency code (lowercase) triggers ValueError
+        (Decimal(""10""), ""usd"", ""EUR"", ValueError),
+        # Invalid target currency code (wrong length) triggers ValueError
+        (Decimal(""10""), ""USD"", ""EURO"", ValueError),
+        # Wrong type for amount triggers TypeError
+        (10, ""USD"", ""EUR"", TypeError),
+    ],
+)
+def test_convert_currency_invalid_inputs(amount, from_cur, to_cur, expected_exc):
+    """"""Input validation errors raise appropriate exceptions and log a warning.""""""
+    exchange_service = Mock()
+    exchange_service.get_rate.return_value = Decimal(""1"")  # not used
+
+    with patch(""my_module.logger"") as mock_logger:
+        with pytest.raises(expected_exc):
+            convert_currency(
+                amount, from_cur, to_cur, exchange_service=exchange_service
+            )
+        # A warning should be logged for validation failures
+        mock_logger.warning.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ""side_effect,expected_exc"",
+    [
+        # Rate not available raises KeyError
+        (KeyError(""rate not found""), KeyError),
+        # Network problem raises ConnectionError
+        (ConnectionError(""service down""), ConnectionError),
+    ],
+)
+def test_convert_currency_service_errors(side_effect, expected_exc):
+    """"""Errors from the exchange service are propagated and logged.""""""
+    amount = Decimal(""50"")
+    from_cur = ""USD""
+    to_cur = ""JPY""
+
+    exchange_service = Mock()
+    exchange_service.get_rate.side_effect = side_effect
+
+    with patch(""my_module.logger"") as mock_logger:
+        with pytest.raises(expected_exc):
+            convert_currency(
+                amount, from_cur, to_cur, exchange_service=exchange_service
+            )
+        # Service errors should also trigger a warning log
+        mock_logger.warning.assert_called_once()",,
+"def parse_csv(file_path: str, *, delimiter: str = ',', has_header: bool = True, file_reader: Any = None) -> List[Dict[str, str]]:
+    """"""
+    Read a CSV file and return a list of rows as dictionaries mapping column names to values.
+
+    Args:
+        file_path (str): Path to the CSV file on the filesystem. Must point to an existing readable file.
+        delimiter (str, optional): Single‑character delimiter used in the CSV file. Defaults to ``','``.
+        has_header (bool, optional): Whether the first line of the CSV contains column headers.
+            If ``False``, column names are generated as ``col0``, ``col1``, etc. Defaults to ``True``.
+        file_reader (Any, optional): Callable that mimics the built‑in ``open`` function and returns an
+            iterator of lines. Allows injection of a mock file reader for testing. If ``None`` the built‑in
+            ``open`` is used.
+
+    Returns:
+        List[Dict[str, str]]: A list where each element represents a row of the CSV file as a dictionary.
+            Keys are column names (from the header or generated) and values are the corresponding cell strings.
+
+    Raises:
+        FileNotFoundError: If ``file_path`` does not exist.
+        PermissionError: If the file cannot be opened due to insufficient permissions.
+        ValueError: If ``delimiter`` is not a single character or the file contents are malformed.
+        TypeError: If ``file_reader`` is provided but is not callable.
+
+    # Dependencies: file_reader()
+    """"""","import pytest
+from unittest.mock import Mock, call
+from typing import List, Dict
+
+# Adjust the import path to the actual module where `parse_csv` is defined
+from my_module import parse_csv
+
+
+def make_file_reader(lines: List[str]) -> Mock:
+    """"""Create a mock file_reader that returns an iterator over the provided lines.""""""
+    mock_reader = Mock()
+    mock_reader.return_value = iter(lines)
+    return mock_reader
+
+
+@pytest.mark.parametrize(
+    ""lines, delimiter, has_header, expected"",
+    [
+        # Standard CSV with header
+        (
+            [""name,age\n"", ""Alice,30\n"", ""Bob,25\n""],
+            "","",
+            True,
+            [{""name"": ""Alice"", ""age"": ""30""}, {""name"": ""Bob"", ""age"": ""25""}],
+        ),
+        # No header, custom delimiter
+        (
+            [""Alice;30\n"", ""Bob;25\n""],
+            "";"",
+            False,
+            [{""col0"": ""Alice"", ""col1"": ""30""}, {""col0"": ""Bob"", ""col1"": ""25""}],
+        ),
+        # Tab‑delimited with header
+        (
+            [""id\tvalue\n"", ""1\t10\n"", ""2\t20\n""],
+            ""\t"",
+            True,
+            [{""id"": ""1"", ""value"": ""10""}, {""id"": ""2"", ""value"": ""20""}],
+        ),
+    ],
+)
+def test_parse_csv_success(lines, delimiter, has_header, expected):
+    """"""Successful parsing for various delimiter/header configurations.""""""
+    dummy_path = ""/fake/path.csv""
+    file_reader_mock = make_file_reader(lines)
+
+    result = parse_csv(
+        dummy_path,
+        delimiter=delimiter,
+        has_header=has_header,
+        file_reader=file_reader_mock,
+    )
+
+    assert result == expected
+    # Ensure the provided file_reader was called exactly once with the file path
+    file_reader_mock.assert_called_once_with(dummy_path)
+
+
+@pytest.mark.parametrize(
+    ""file_reader_setup, delimiter, has_header, exc_type"",
+    [
+        # File not found simulated by the reader raising FileNotFoundError
+        (lambda: Mock(side_effect=FileNotFoundError(""not found"")), "","", True, FileNotFoundError),
+        # Permission error simulated similarly
+        (lambda: Mock(side_effect=PermissionError(""no permission"")), "","", True, PermissionError),
+        # Invalid delimiter (more than one character)
+        (lambda: make_file_reader([""a,b\n"", ""1,2\n""]), "";;"", True, ValueError),
+        # Malformed CSV: header has 2 columns, row has 3
+        (lambda: make_file_reader([""a,b\n"", ""1,2,3\n""]), "","", True, ValueError),
+    ],
+)
+def test_parse_csv_exceptions(file_reader_setup, delimiter, has_header, exc_type):
+    """"""Check that documented exceptions are raised for error conditions.""""""
+    dummy_path = ""/fake/path.csv""
+    file_reader_mock = file_reader_setup()
+
+    with pytest.raises(exc_type):
+        parse_csv(
+            dummy_path,
+            delimiter=delimiter,
+            has_header=has_header,
+            file_reader=file_reader_mock,
+        )
+    # For reader‑raised exceptions, the mock should have been invoked
+    if isinstance(file_reader_mock, Mock) and not isinstance(exc_type, TypeError):
+        file_reader_mock.assert_called_once_with(dummy_path)
+
+
+def test_parse_csv_file_reader_type_error():
+    """"""Providing a non‑callable file_reader should raise TypeError.""""""
+    dummy_path = ""/fake/path.csv""
+    non_callable = ""I am not a function""
+
+    with pytest.raises(TypeError):
+        parse_csv(dummy_path, file_reader=non_callable)",,
+"def parse_csv(csv_content: str, delimiter: str = ',') -> List[Dict[str, str]]:
+    """"""
+    Parse a CSV formatted string into a list of dictionaries, one per row.
+
+    Args:
+        csv_content (str): The CSV data as a single string. Each line represents a record.
+        delimiter (str, optional): Character used to separate fields. Defaults to ','.
+
+    Returns:
+        List[Dict[str, str]]: A list where each element is a dict mapping column headers to cell values.
+
+    Raises:
+        ValueError: If ``csv_content`` is empty or does not contain a header row.
+        TypeError: If ``csv_content`` is not a string or ``delimiter`` is not a single-character string.
+
+    # Dependencies: csv.reader()
+    """"""","import pytest
+from unittest.mock import patch
+
+from my_module import parse_csv
+
+
+@patch(""my_module.csv.reader"")
+@pytest.mark.parametrize(
+    ""csv_content,delimiter,reader_rows,expected"",
+    [
+        # standard comma delimiter
+        (
+            ""id,name\n1,Alice\n2,Bob"",
+            "","",
+            [
+                [""id"", ""name""],
+                [""1"", ""Alice""],
+                [""2"", ""Bob""],
+            ],
+            [
+                {""id"": ""1"", ""name"": ""Alice""},
+                {""id"": ""2"", ""name"": ""Bob""},
+            ],
+        ),
+        # custom semicolon delimiter
+        (
+            ""city;country\nParis;France\nBerlin;Germany"",
+            "";"",
+            [
+                [""city"", ""country""],
+                [""Paris"", ""France""],
+                [""Berlin"", ""Germany""],
+            ],
+            [
+                {""city"": ""Paris"", ""country"": ""France""},
+                {""city"": ""Berlin"", ""country"": ""Germany""},
+            ],
+        ),
+        # empty data rows (only header)
+        (
+            ""header1,header2"",
+            "","",
+            [[""header1"", ""header2""]],
+            [],
+        ),
+    ],
+)
+def test_parse_csv_success(mock_reader, csv_content, delimiter, reader_rows, expected):
+    """"""Verify correct parsing and that csv.reader is called with expected arguments.""""""
+    mock_reader.return_value = iter(reader_rows)
+
+    result = parse_csv(csv_content, delimiter=delimiter)
+
+    assert result == expected
+    mock_reader.assert_called_once_with(csv_content.splitlines(), delimiter=delimiter)
+
+
+@pytest.mark.parametrize(
+    ""csv_content,delimiter,expected_exception"",
+    [
+        # empty string raises ValueError
+        ("""", "","", ValueError),
+        # missing header row (single line with data only) raises ValueError
+        (""value1,value2"", "","", ValueError),
+        # csv_content not a string raises TypeError
+        (12345, "","", TypeError),
+        # delimiter not a single‑character string raises TypeError
+        (""a,b\nc,d"", "";;"", TypeError),
+    ],
+)
+def test_parse_csv_error_cases(csv_content, delimiter, expected_exception):
+    """"""Test that invalid inputs raise the documented exceptions.""""""
+    # Patch csv.reader to ensure it is not invoked when input validation fails
+    with patch(""my_module.csv.reader""):
+        with pytest.raises(expected_exception):
+            parse_csv(csv_content, delimiter=delimiter)",,
+"def resize_image(image_bytes: bytes, width: int, height: int, *, keep_aspect_ratio: bool = True) -> bytes:
+    """"""
+    Resize an image to the specified dimensions.
+
+    Args:
+        image_bytes (bytes): Raw image data in a supported format (e.g., PNG, JPEG).
+        width (int): Target width in pixels. Must be a positive integer.
+        height (int): Target height in pixels. Must be a positive integer.
+        keep_aspect_ratio (bool, optional): If true, the image will be resized preserving the original aspect
+            ratio; the ``height`` argument may be ignored. Defaults to ``True``.
+
+    Returns:
+        bytes: The resized image encoded in the same format as the input.
+
+    Raises:
+        ValueError: If ``width`` or ``height`` is non‑positive.
+        OSError: If the image format is unsupported or the image cannot be processed.
+
+    # Dependencies: PIL.Image.open(), PIL.Image.resize()
+    """"""","import pytest
+from unittest.mock import Mock, patch
+
+# Adjust the import path to where ``resize_image`` is defined.
+from my_module import resize_image
+
+
+@pytest.mark.parametrize(
+    ""image_bytes, width, height, keep_aspect, expected_bytes"",
+    [
+        # keep aspect ratio true: height may be ignored by implementation
+        (b""dummy"", 100, 200, True, b""resized_bytes""),
+        # keep aspect ratio false: both dimensions used
+        (b""dummy"", 50, 60, False, b""resized_bytes""),
+        # another simple case
+        (b""dummy"", 10, 10, True, b""resized_bytes""),
+    ],
+)
+@patch(""my_module.Image.open"")
+def test_resize_image_success(
+    mock_open, image_bytes, width, height, keep_aspect, expected_bytes
+):
+    """"""
+    Verify that a valid image is processed and the returned value is bytes.
+    """"""
+    # Mock image object returned by Image.open()
+    mock_image = Mock()
+    # Mock the result of .resize()
+    mock_resized = Mock()
+    # Assume the final bytes are obtained via .tobytes()
+    mock_resized.tobytes.return_value = expected_bytes
+    mock_image.resize.return_value = mock_resized
+    mock_open.return_value = mock_image
+
+    result = resize_image(
+        image_bytes, width=width, height=height, keep_aspect_ratio=keep_aspect
+    )
+
+    # The function should return the bytes produced by the mocked resize chain
+    assert isinstance(result, bytes)
+    assert result == expected_bytes
+
+    # Ensure Image.open was called with the original bytes
+    mock_open.assert_called_once_with(image_bytes)
+
+    # Verify that resize was invoked with a size tuple
+    resize_call_args = mock_image.resize.call_args
+    assert resize_call_args is not None
+    size_arg = resize_call_args[0][0]
+    assert isinstance(size_arg, tuple) and len(size_arg) == 2
+    # Width should match the requested width; height may differ when keep_aspect_ratio=True
+    assert size_arg[0] == width
+
+
+@pytest.mark.parametrize(
+    ""image_bytes, width, height, keep_aspect"",
+    [
+        # Non‑positive width
+        (b""dummy"", 0, 100, True),
+        # Non‑positive height
+        (b""dummy"", 100, -5, False),
+        # Both non‑positive
+        (b""dummy"", -10, 0, True),
+    ],
+)
+def test_resize_image_value_error(image_bytes, width, height, keep_aspect):
+    """"""
+    Ensure ``ValueError`` is raised for non‑positive dimensions.
+    """"""
+    with pytest.raises(ValueError):
+        resize_image(
+            image_bytes, width=width, height=height, keep_aspect_ratio=keep_aspect
+        )
+
+
+@patch(""my_module.Image.open"")
+def test_resize_image_unsupported_format_error(mock_open):
+    """"""
+    Simulate an unsupported image format causing ``OSError`` from PIL.
+    """"""
+    mock_open.side_effect = OSError(""unsupported format"")
+    with pytest.raises(OSError):
+        resize_image(b""not_an_image"", width=100, height=100, keep_aspect_ratio=True)",,
+"def calculate_discount(price: float, category: str, is_member: bool) -> float:
+    """"""
+    Calculate the discount amount based on price, category, and membership status.
+
+    Args:
+        price (float): Original price of the item. Must be non‑negative.
+        category (str): Category of the item, e.g., ""electronics"", ""clothing"", ""food"".
+        is_member (bool): Whether the buyer has a premium membership.
+
+    Returns:
+        float: The discount amount to be subtracted from the original price.
+
+    Raises:
+        ValueError: If ``price`` is negative.
+        KeyError: If ``category`` is not recognized.
+
+    # Dependencies: get_member_discount_rate(), get_category_discount()
+    """"""","import pytest
+from unittest.mock import patch
+from my_module import calculate_discount
+
+
+@patch(""my_module.get_category_discount"")
+@patch(""my_module.get_member_discount_rate"")
+@pytest.mark.parametrize(
+    ""price,category,is_member,member_rate,category_rate,expected"",
+    [
+        # regular case: member gets extra discount
+        (200.0, ""electronics"", True, 0.10, 0.05, 200.0 * (0.10 + 0.05)),
+        # non‑member, zero price edge case
+        (0.0, ""food"", False, 0.00, 0.02, 0.0 * (0.00 + 0.02)),
+        # non‑member, different category
+        (150.0, ""clothing"", False, 0.00, 0.15, 150.0 * (0.00 + 0.15)),
+    ],
+)
+def test_calculate_discount_success(
+    mock_member_rate, mock_category_discount, price, category, is_member, member_rate, category_rate, expected
+):
+    """"""Verify correct discount calculation and proper calls to dependencies.""""""
+    mock_member_rate.return_value = member_rate
+    mock_category_discount.return_value = category_rate
+
+    result = calculate_discount(price, category, is_member)
+
+    assert result == pytest.approx(expected)
+    mock_member_rate.assert_called_once_with(is_member)
+    mock_category_discount.assert_called_once_with(category)
+
+
+@patch(""my_module.get_category_discount"")
+@patch(""my_module.get_member_discount_rate"")
+def test_calculate_discount_error_cases(mock_member_rate, mock_category_discount):
+    """"""Test that invalid inputs raise the documented exceptions.""""""
+    # Negative price should raise ValueError
+    mock_member_rate.return_value = 0.10
+    mock_category_discount.return_value = 0.05
+    with pytest.raises(ValueError):
+        calculate_discount(-10.0, ""electronics"", True)
+
+    # Unrecognized category should propagate KeyError from the dependency
+    mock_category_discount.side_effect = KeyError(""unknown category"")
+    with pytest.raises(KeyError):
+        calculate_discount(100.0, ""unknown_category"", False)",,
+"def download_file(url: str, destination: str, http_client: Any, *, timeout: int = 30) -> None:
+    """"""
+    Retrieve a file from the given URL and write it to the specified local path.
+
+    Args:
+        url (str): The HTTP(S) URL of the file to download.
+        destination (str): File system path where the downloaded content will be saved.
+        http_client (Any): An object exposing a ``get(url: str, stream: bool, timeout: int)`` method that returns
+            a response object with ``raise_for_status()`` and an iterable ``iter_content(chunk_size: int)``.
+        timeout (int, optional): Maximum number of seconds to wait for the request to complete. Defaults to ``30``.
+
+    Returns:
+        None: The function writes the response content to ``destination``. No value is returned.
+
+    Raises:
+        ValueError: If ``url`` is empty or not a valid URL.
+        IOError: If writing to ``destination`` fails (e.g., permission denied).
+        ConnectionError: If the HTTP request cannot be completed.
+        RuntimeError: If the response status indicates an error (non‑2xx).
+
+    # Dependencies: http_client.get(), response.raise_for_status(), response.iter_content()
+    """"""","import pytest
+from unittest.mock import Mock, patch, mock_open
+
+from my_module import download_file
+
+
+@pytest.mark.parametrize(
+    ""url,destination,content_chunks,expected_calls"",
+    [
+        (
+            ""https://example.com/file.txt"",
+            ""/tmp/file.txt"",
+            [b""hello "", b""world""],
+            [b""hello "", b""world""],
+        ),
+        (
+            ""http://example.org/data.bin"",
+            ""/var/data.bin"",
+            [b""\x00\x01"", b""\x02\x03"", b""\x04""],
+            [b""\x00\x01"", b""\x02\x03"", b""\x04""],
+        ),
+    ],
+)
+def test_download_file_success(url, destination, content_chunks, expected_calls):
+    http_client = Mock()
+    response = Mock()
+    response.raise_for_status = Mock()
+    response.iter_content = Mock(return_value=content_chunks)
+    http_client.get.return_value = response
+
+    m_open = mock_open()
+    with patch(""builtins.open"", m_open), patch(""my_module.logger"", create=True):
+        download_file(url, destination, http_client)
+
+    http_client.get.assert_called_once_with(url, stream=True, timeout=30)
+    response.raise_for_status.assert_called_once()
+    # Verify that each chunk was written to the file
+    handle = m_open()
+    write_calls = [call[0][0] for call in handle.write.call_args_list]
+    assert write_calls == expected_calls
+
+
+@pytest.mark.parametrize(
+    ""url,expected_exception"",
+    [
+        ("""", ValueError),
+        (""not a url"", ValueError),
+    ],
+)
+def test_download_file_invalid_input(url, expected_exception):
+    http_client = Mock()
+    with patch(""builtins.open"", mock_open()):
+        with pytest.raises(expected_exception):
+            download_file(url, ""/tmp/out"", http_client)
+
+
+@pytest.mark.parametrize(
+    ""setup_mock,expected_exception"",
+    [
+        # Connection error during GET
+        (
+            lambda http_client: http_client.get.side_effect = ConnectionError(""net""),
+            ConnectionError,
+        ),
+        # Response status error (non‑2xx)
+        (
+            lambda resp: resp.raise_for_status.side_effect = RuntimeError(""bad status""),
+            RuntimeError,
+        ),
+        # IOError while writing file
+        (
+            lambda m_open: m_open.side_effect = IOError(""write fail""),
+            IOError,
+        ),
+    ],
+)
+def test_download_file_error_cases(setup_mock, expected_exception):
+    http_client = Mock()
+    response = Mock()
+    response.raise_for_status = Mock()
+    response.iter_content = Mock(return_value=[b""data""])
+
+    http_client.get.return_value = response
+
+    m_open = mock_open()
+    # Apply the specific side effect based on the test case
+    if expected_exception is ConnectionError:
+        setup_mock(http_client)
+    elif expected_exception is RuntimeError:
+        setup_mock(response)
+    elif expected_exception is IOError:
+        setup_mock(m_open)
+
+    with patch(""builtins.open"", m_open):
+        with pytest.raises(expected_exception):
+            download_file(""https://example.com/file"", ""/tmp/file"", http_client)",,
+"def aggregate_user_stats(user_records: List[Dict[str, Any]], include_inactive: bool = False, timezone: Optional[str] = None) -> Dict[str, float]:
+    """"""
+    Compute aggregated statistics for a collection of user records.
+
+    Args:
+        user_records (List[Dict[str, Any]]): A list where each element represents a user profile with keys
+            ``id`` (int), ``active`` (bool), ``login_times`` (List[datetime]), and ``metrics`` (Dict[str, float]).
+        include_inactive (bool, optional): If ``True`` also include users where ``active`` is ``False`` in the
+            aggregation. Defaults to ``False``.
+        timezone (Optional[str], optional): IANA timezone name used to normalize ``login_times`` before
+            processing. If ``None`` the timestamps are assumed to be UTC. Defaults to ``None``.
+
+    Returns:
+        Dict[str, float]: A mapping with keys ``total_logins``, ``average_sessions_per_user`` and
+        ``overall_metric_score`` representing the summed login count, average number of sessions per
+        considered user, and the mean of all metric values across users.
+
+    Raises:
+        ValueError: If any user record is missing required keys or contains malformed data.
+        pytz.UnknownTimeZoneError: If ``timezone`` is provided but is not a recognized IANA timezone.
+        TypeError: If ``user_records`` is not a list or its elements are not dictionaries.
+
+    # Dependencies: validate_user_record(), logger.info()
+    """"""","import pytest
+from unittest.mock import patch
+from datetime import datetime
+import pytz
+
+from my_module import aggregate_user_stats
+
+
+@pytest.mark.parametrize(
+    ""user_records,include_inactive,timezone,expected"",
+    [
+        (
+            # case 1: only active users are considered
+            [
+                {
+                    ""id"": 1,
+                    ""active"": True,
+                    ""login_times"": [
+                        datetime(2021, 1, 1, 12, 0),
+                        datetime(2021, 1, 2, 13, 0),
+                    ],
+                    ""metrics"": {""score"": 10.0, ""quality"": 5.0},
+                },
+                {
+                    ""id"": 2,
+                    ""active"": False,
+                    ""login_times"": [datetime(2021, 1, 3, 14, 0)],
+                    ""metrics"": {""score"": 7.0},
+                },
+            ],
+            False,
+            None,
+            {
+                ""total_logins"": 2.0,
+                ""average_sessions_per_user"": 2.0,
+                ""overall_metric_score"": 7.5,
+            },
+        ),
+        (
+            # case 2: include inactive users and explicit UTC timezone
+            [
+                {
+                    ""id"": 1,
+                    ""active"": True,
+                    ""login_times"": [datetime(2021, 1, 1, 9, 0)],
+                    ""metrics"": {""score"": 8.0},
+                },
+                {
+                    ""id"": 2,
+                    ""active"": False,
+                    ""login_times"": [
+                        datetime(2021, 1, 2, 10, 0),
+                        datetime(2021, 1, 3, 11, 0),
+                    ],
+                    ""metrics"": {""score"": 6.0, ""quality"": 4.0},
+                },
+            ],
+            True,
+            ""UTC"",
+            {
+                ""total_logins"": 3.0,
+                ""average_sessions_per_user"": 1.5,
+                ""overall_metric_score"": 6.0,
+            },
+        ),
+    ],
+)
+def test_aggregate_user_stats_success(user_records, include_inactive, timezone, expected):
+    with patch(""my_module.validate_user_record"") as mock_validate, patch(
+        ""my_module.logger""
+    ) as mock_logger:
+        mock_validate.return_value = True
+
+        result = aggregate_user_stats(
+            user_records, include_inactive=include_inactive, timezone=timezone
+        )
+
+        assert result == expected
+        # ensure the validator was called for each record
+        assert mock_validate.call_count == len(user_records)
+        # logger.info should have been invoked at least once
+        assert mock_logger.info.called
+
+
+@pytest.mark.parametrize(
+    ""user_records,include_inactive,timezone,expected_exception,validate_side_effect"",
+    [
+        # TypeError when user_records is not a list
+        (""not a list"", False, None, TypeError, None),
+        # ValueError propagated from validate_user_record
+        (
+            [
+                {
+                    ""id"": 1,
+                    ""active"": True,
+                    ""login_times"": [datetime(2021, 1, 1, 12, 0)],
+                    ""metrics"": {""score"": 5.0},
+                }
+            ],
+            False,
+            None,
+            ValueError,
+            ValueError(""invalid record""),
+        ),
+        # UnknownTimeZoneError for an unrecognised timezone string
+        (
+            [
+                {
+                    ""id"": 1,
+                    ""active"": True,
+                    ""login_times"": [datetime(2021, 1, 1, 12, 0)],
+                    ""metrics"": {""score"": 5.0},
+                }
+            ],
+            False,
+            ""Invalid/Timezone"",
+            pytz.UnknownTimeZoneError,
+            None,
+        ),
+    ],
+)
+def test_aggregate_user_stats_errors(
+    user_records, include_inactive, timezone, expected_exception, validate_side_effect
+):
+    with patch(""my_module.validate_user_record"") as mock_validate, patch(
+        ""my_module.logger""
+    ) as mock_logger:
+        if validate_side_effect is not None:
+            mock_validate.side_effect = validate_side_effect
+        else:
+            mock_validate.return_value = True
+
+        with pytest.raises(expected_exception):
+            aggregate_user_stats(
+                user_records, include_inactive=include_inactive, timezone=timezone
+            )
+
+        # logger.info should not be called when an exception is raised early
+        assert not mock_logger.info.called",,
+"def process_payment(order_id: str, amount: float, currency: str, payment_gateway: Any, *, user_id: Optional[int] = None, metadata: Optional[Dict[str, Any]] = None, max_attempts: int = 5) -> bool:
+    """"""
+    Execute a payment transaction through an external gateway, applying optional metadata and user association.
+
+    Args:
+        order_id (str): Unique identifier of the order to be paid.
+        amount (float): Monetary amount to charge. Must be greater than zero.
+        currency (str): Three‑letter ISO currency code (e.g., ""USD"", ""EUR"").
+        payment_gateway (Any): An external service object exposing a ``charge(order_id: str, amount: float, currency: str, metadata: dict) -> dict`` method.
+        user_id (Optional[int], optional): Identifier of the user making the purchase. If provided, it is added to the transaction metadata. Defaults to ``None``.
+        metadata (Optional[Dict[str, Any]], optional): Additional key‑value information to be sent to the gateway. Defaults to ``None``.
+        max_attempts (int, optional): Number of retry attempts for transient network failures before giving up. Must be a positive integer. Defaults to ``5``.
+
+    Returns:
+        bool: ``True`` if the payment was successfully captured, ``False`` otherwise.
+
+    Raises:
+        ValueError: If ``amount`` is not positive or ``currency`` is an empty string.
+        InsufficientFundsError: If the gateway reports that the account lacks sufficient funds.
+        CurrencyNotSupportedError: If the provided ``currency`` is not supported by the gateway.
+        NetworkError: If all retry attempts fail due to network issues.
+        TypeError: If ``metadata`` is provided but is not a dictionary.
+
+    # Dependencies: payment_gateway.charge(order_id, amount, currency, metadata), log_error(message)
+    """"""","import pytest
+from unittest.mock import Mock, call, patch
+
+from my_module import (
+    process_payment,
+    InsufficientFundsError,
+    CurrencyNotSupportedError,
+    NetworkError,
+)
+
+
+@patch(""my_module.log_error"")
+@pytest.mark.parametrize(
+    ""order_id, amount, currency, user_id, metadata, expected_meta"",
+    [
+        # simple case, no optional data
+        (""ord-1"", 100.0, ""USD"", None, None, {}),
+        # user_id only
+        (""ord-2"", 50.5, ""EUR"", 42, None, {""user_id"": 42}),
+        # metadata only
+        (""ord-3"", 75.0, ""GBP"", None, {""note"": ""gift""}, {""note"": ""gift""}),
+        # both metadata and user_id (user_id merges into metadata)
+        (
+            ""ord-4"",
+            20.0,
+            ""JPY"",
+            7,
+            {""promo"": ""SUMMER""},
+            {""promo"": ""SUMMER"", ""user_id"": 7},
+        ),
+    ],
+)
+def test_process_payment_success(
+    mock_log_error,
+    order_id,
+    amount,
+    currency,
+    user_id,
+    metadata,
+    expected_meta,
+):
+    """"""Successful payment should return True and call gateway with merged metadata.""""""
+    gateway = Mock()
+    gateway.charge.return_value = {""status"": ""captured""}
+
+    result = process_payment(
+        order_id,
+        amount,
+        currency,
+        gateway,
+        user_id=user_id,
+        metadata=metadata,
+    )
+
+    assert result is True
+    gateway.charge.assert_called_once_with(
+        order_id, amount, currency, expected_meta
+    )
+    mock_log_error.assert_not_called()
+
+
+@patch(""my_module.log_error"")
+@pytest.mark.parametrize(
+    ""order_id, amount, currency, user_id, metadata, side_effect, expected_exc, expect_call"",
+    [
+        # amount non‑positive
+        (""ord-5"", 0.0, ""USD"", None, None, None, ValueError, False),
+        # empty currency string
+        (""ord-6"", 10.0, """", None, None, None, ValueError, False),
+        # metadata wrong type
+        (""ord-7"", 10.0, ""USD"", None, [""not"", ""dict""], None, TypeError, False),
+        # insufficient funds reported by gateway
+        (
+            ""ord-8"",
+            100.0,
+            ""USD"",
+            None,
+            None,
+            InsufficientFundsError(""no funds""),
+            InsufficientFundsError,
+            True,
+        ),
+        # unsupported currency reported by gateway
+        (
+            ""ord-9"",
+            50.0,
+            ""ABC"",
+            None,
+            None,
+            CurrencyNotSupportedError(""unsupported""),
+            CurrencyNotSupportedError,
+            True,
+        ),
+        # network error after all retries
+        (
+            ""ord-10"",
+            30.0,
+            ""EUR"",
+            None,
+            None,
+            NetworkError(""down""),
+            NetworkError,
+            True,
+        ),
+    ],
+)
+def test_process_payment_error_cases(
+    mock_log_error,
+    order_id,
+    amount,
+    currency,
+    user_id,
+    metadata,
+    side_effect,
+    expected_exc,
+    expect_call,
+):
+    """"""Validate that documented exceptions are raised and logging occurs where appropriate.""""""
+    gateway = Mock()
+    if isinstance(side_effect, Exception):
+        gateway.charge.side_effect = side_effect
+    else:
+        gateway.charge.return_value = {""status"": ""failed""}
+
+    if expected_exc in (ValueError, TypeError):
+        # Validation errors should be raised before any gateway call
+        with pytest.raises(expected_exc):
+            process_payment(
+                order_id,
+                amount,
+                currency,
+                gateway,
+                user_id=user_id,
+                metadata=metadata,
+                max_attempts=1,
+            )
+        if expect_call:
+            gateway.charge.assert_called()
+        else:
+            gateway.charge.assert_not_called()
+        mock_log_error.assert_not_called()
+    else:
+        # Errors coming from the gateway
+        with pytest.raises(expected_exc):
+            process_payment(
+                order_id,
+                amount,
+                currency,
+                gateway,
+                user_id=user_id,
+                metadata=metadata,
+                max_attempts=1,
+            )
+        if expect_call:
+            gateway.charge.assert_called()
+        mock_log_error.assert_called()
+
+
+@patch(""my_module.log_error"")
+def test_process_payment_network_retry(mock_log_error):
+    """"""Transient NetworkError should be retried up to max_attempts before succeeding or giving up.""""""
+    gateway = Mock()
+    # First two attempts raise NetworkError, third succeeds
+    gateway.charge.side_effect = [
+        NetworkError(""temp failure""),
+        NetworkError(""temp failure""),
+        {""status"": ""captured""},
+    ]
+
+    result = process_payment(
+        ""ord-11"",
+        25.0,
+        ""USD"",
+        gateway,
+        max_attempts=3,
+    )
+
+    assert result is True
+    # Charge should be called three times (initial + 2 retries)
+    assert gateway.charge.call_count == 3
+    # log_error should have been called for each failed attempt
+    assert mock_log_error.call_count == 2
+
+
+@patch(""my_module.log_error"")
+def test_process_payment_network_exhausted(mock_log_error):
+    """"""When all retry attempts fail with NetworkError, the function should raise NetworkError.""""""
+    gateway = Mock()
+    gateway.charge.side_effect = NetworkError(""persistent failure"")
+
+    with pytest.raises(NetworkError):
+        process_payment(
+            ""ord-12"",
+            15.0,
+            ""USD"",
+            gateway,
+            max_attempts=2,
+        )
+
+    # Should have attempted charge max_attempts times
+    assert gateway.charge.call_count == 2
+    # log_error should be called for each failure
+    assert mock_log_error.call_count == 2",,
+"def calculate_portfolio_metrics(
+    holdings: List[Dict[str, Any]],
+    market_data_provider: Any,
+    *,
+    include_historical: bool = False,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+) -> Tuple[float, float, Dict[str, float]]:
+    """"""
+    Compute aggregate financial metrics for a portfolio of holdings using market price data.
+
+    Args:
+        holdings (List[Dict[str, Any]]): A list where each element is a dict with keys
+            ``symbol`` (str), ``quantity`` (float), and ``cost_basis`` (float). All fields are required.
+        market_data_provider (Any): Service object exposing ``get_price(symbol: str, date: Optional[datetime] = None) -> float``.
+        include_historical (bool, optional): If ``True`` the calculation uses ``start_date`` and ``end_date`` to
+            fetch historical prices; otherwise the latest price is used. Defaults to ``False``.
+        start_date (Optional[datetime], optional): Start of the historical window when ``include_historical`` is ``True``.
+            Must be earlier than ``end_date``. Defaults to ``None``.
+        end_date (Optional[datetime], optional): End of the historical window when ``include_historical`` is ``True``.
+            Defaults to ``None``.
+
+    Returns:
+        Tuple[float, float, Dict[str, float]]: ``(total_market_value, total_cost_basis, performance_by_symbol)`` where
+            ``total_market_value`` is the sum of current (or historical) market values,
+            ``total_cost_basis`` is the aggregated cost basis,
+            and ``performance_by_symbol`` maps each symbol to its percentage gain/loss.
+
+    Raises:
+        ValueError: If any holding dict is missing required keys, contains non‑numeric ``quantity``/``cost_basis``,
+            or if ``include_historical`` is ``True`` but ``start_date``/``end_date`` are invalid.
+        TypeError: If ``holdings`` is not a list or its elements are not dictionaries, or if ``market_data_provider``
+            does not implement ``get_price``.
+        RuntimeError: If ``market_data_provider`` fails to return a price for a given symbol.
+        MarketDataError: Custom exception raised when the provider indicates a data‑unavailability condition.
+
+    # Dependencies: market_data_provider.get_price()
+    """"""","import pytest
+from unittest.mock import Mock, patch, call
+from datetime import datetime
+
+# Adjust the import path to where ``calculate_portfolio_metrics`` is defined.
+from mymodule import calculate_portfolio_metrics, MarketDataError
+
+
+@pytest.mark.parametrize(
+    ""holdings,include_hist,start,end,price_map,expected"",
+    [
+        # Latest prices, simple two holdings
+        (
+            [
+                {""symbol"": ""AAA"", ""quantity"": 10.0, ""cost_basis"": 5.0},
+                {""symbol"": ""BBB"", ""quantity"": 5.0, ""cost_basis"": 20.0},
+            ],
+            False,
+            None,
+            None,
+            {""AAA"": 8.0, ""BBB"": 22.0},
+            (
+                10.0 * 8.0 + 5.0 * 22.0,          # total_market_value
+                10.0 * 5.0 + 5.0 * 20.0,          # total_cost_basis
+                {
+                    ""AAA"": ((8.0 - 5.0) / 5.0) * 100,
+                    ""BBB"": ((22.0 - 20.0) / 20.0) * 100,
+                },
+            ),
+        ),
+        # Historical prices with valid date range
+        (
+            [
+                {""symbol"": ""CCC"", ""quantity"": 2.0, ""cost_basis"": 15.0},
+            ],
+            True,
+            datetime(2022, 1, 1),
+            datetime(2022, 12, 31),
+            {""CCC"": 18.0},
+            (
+                2.0 * 18.0,
+                2.0 * 15.0,
+                {""CCC"": ((18.0 - 15.0) / 15.0) * 100},
+            ),
+        ),
+        # Empty holdings list
+        (
+            [],
+            False,
+            None,
+            None,
+            {},
+            (0.0, 0.0, {}),
+        ),
+    ],
+)
+def test_calculate_portfolio_metrics_success(
+    holdings,
+    include_hist,
+    start,
+    end,
+    price_map,
+    expected,
+):
+    """"""Validate correct aggregation and performance calculation for various scenarios.""""""
+    provider_mock = Mock()
+    # Configure get_price to return values from price_map, ignoring date argument
+    def price_side_effect(symbol, date=None):
+        return price_map[symbol]
+
+    provider_mock.get_price.side_effect = price_side_effect
+
+    result = calculate_portfolio_metrics(
+        holdings,
+        provider_mock,
+        include_historical=include_hist,
+        start_date=start,
+        end_date=end,
+    )
+
+    total_mv, total_cb, perf = result
+    exp_mv, exp_cb, exp_perf = expected
+
+    assert total_mv == pytest.approx(exp_mv)
+    assert total_cb == pytest.approx(exp_cb)
+    assert perf.keys() == exp_perf.keys()
+    for sym in perf:
+        assert perf[sym] == pytest.approx(exp_perf[sym])
+
+    # Verify get_price call pattern
+    if include_hist:
+        expected_calls = [
+            call(h[""symbol""], date=end) for h in holdings
+        ]
+    else:
+        expected_calls = [
+            call(h[""symbol""], date=None) for h in holdings
+        ]
+    provider_mock.get_price.assert_has_calls(expected_calls, any_order=False)
+
+
+@pytest.mark.parametrize(
+    ""holdings,provider,include_hist,start,end,exc_type"",
+    [
+        # holdings not a list
+        (""not a list"", Mock(), False, None, None, TypeError),
+        # holding missing required key
+        (
+            [{""symbol"": ""AAA"", ""quantity"": 10.0}],  # missing cost_basis
+            Mock(),
+            False,
+            None,
+            None,
+            ValueError,
+        ),
+        # non‑numeric quantity
+        (
+            [{""symbol"": ""AAA"", ""quantity"": ""ten"", ""cost_basis"": 5.0}],
+            Mock(),
+            False,
+            None,
+            None,
+            ValueError,
+        ),
+        # include_historical true but start_date missing
+        (
+            [{""symbol"": ""AAA"", ""quantity"": 1.0, ""cost_basis"": 1.0}],
+            Mock(),
+            True,
+            None,
+            datetime(2022, 1, 1),
+            ValueError,
+        ),
+        # start_date after end_date
+        (
+            [{""symbol"": ""AAA"", ""quantity"": 1.0, ""cost_basis"": 1.0}],
+            Mock(),
+            True,
+            datetime(2023, 1, 1),
+            datetime(2022, 1, 1),
+            ValueError,
+        ),
+        # provider lacks get_price attribute
+        (
+            [{""symbol"": ""AAA"", ""quantity"": 1.0, ""cost_basis"": 1.0}],
+            object(),
+            False,
+            None,
+            None,
+            TypeError,
+        ),
+    ],
+)
+def test_calculate_portfolio_metrics_invalid_inputs(
+    holdings,
+    provider,
+    include_hist,
+    start,
+    end,
+    exc_type,
+):
+    """"""Check that improper arguments raise the documented exceptions.""""""
+    # If provider is a simple Mock but missing get_price, ensure attribute error mimics TypeError case
+    if not hasattr(provider, ""get_price""):
+        provider = provider  # keep as is to trigger TypeError
+
+    with pytest.raises(exc_type):
+        calculate_portfolio_metrics(
+            holdings,
+            provider,
+            include_historical=include_hist,
+            start_date=start,
+            end_date=end,
+        )
+
+
+@pytest.mark.parametrize(
+    ""price_side_effect,expected_exc"",
+    [
+        # Provider raises generic RuntimeError
+        (RuntimeError(""service down""), RuntimeError),
+        # Provider raises custom MarketDataError
+        (MarketDataError(""no data""), MarketDataError),
+    ],
+)
+def test_calculate_portfolio_metrics_provider_errors(
+    price_side_effect,
+    expected_exc,
+):
+    """"""Ensure errors from the market data provider are propagated.""""""
+    holdings = [
+        {""symbol"": ""XYZ"", ""quantity"": 3.0, ""cost_basis"": 10.0},
+    ]
+    provider_mock = Mock()
+    provider_mock.get_price.side_effect = price_side_effect
+
+    with pytest.raises(expected_exc):
+        calculate_portfolio_metrics(
+            holdings,
+            provider_mock,
+            include_historical=False,
+        )
+    # Verify that get_price was indeed called for the symbol
+    provider_mock.get_price.assert_called_once_with(""XYZ"", date=None)",,
+"def aggregate_metrics(data: List[Dict[str, Any]], *, metric: str, weight: Optional[float] = None) -> float:
+    """"""
+    Compute a weighted aggregate of a specified metric across a collection of records.
+
+    Args:
+        data: A list of dictionaries where each dictionary represents a record. Each record must contain the
+            key specified by ``metric`` and may optionally include a numeric ``'weight'`` field.
+        metric: The key in each record whose numeric value will be aggregated.
+        weight: An optional global weight to apply to every record's metric value. If ``None``, the function will
+            use the per‑record ``'weight'`` field when present; otherwise it defaults to ``1.0``.
+
+    Returns:
+        The weighted sum of the metric values as a float.
+
+    Raises:
+        TypeError: If ``data`` is not a list, if any element of ``data`` is not a dict, or if metric values are not
+            numeric types (int or float).
+        ValueError: If ``metric`` is missing from any record, or if any weight (global or per‑record) is
+            non‑positive.
+
+    # Dependencies: validate_record(record: dict) -> None
+    """"""","import pytest
+from unittest.mock import patch
+from typing import List, Dict, Any, Optional
+
+# Adjust the import path to where ``aggregate_metrics`` is defined.
+from mymodule import aggregate_metrics
+
+
+@pytest.mark.parametrize(
+    ""data, metric, weight, expected"",
+    [
+        # Simple aggregation without any weights.
+        (
+            [{""score"": 10}, {""score"": 20}],
+            ""score"",
+            None,
+            30.0,
+        ),
+        # Use per‑record ``weight`` fields when no global weight is supplied.
+        (
+            [{""score"": 10, ""weight"": 2}, {""score"": 5, ""weight"": 3}],
+            ""score"",
+            None,
+            35.0,
+        ),
+        # Apply a global weight; per‑record weights are ignored.
+        (
+            [{""score"": 10, ""weight"": 2}, {""score"": 5, ""weight"": 3}],
+            ""score"",
+            0.5,
+            7.5,
+        ),
+        # Empty data should return 0.0.
+        ([], ""any_metric"", None, 0.0),
+    ],
+)
+def test_aggregate_metrics_success(data: List[Dict[str, Any]], metric: str, weight: Optional[float], expected: float):
+    """"""
+    Verify correct weighted aggregation for valid inputs.
+    """"""
+    with patch(""mymodule.validate_record"") as mock_validate:
+        result = aggregate_metrics(data, metric=metric, weight=weight)
+
+    assert isinstance(result, float)
+    assert result == pytest.approx(expected)
+
+    # ``validate_record`` should be called once per record (even if data is empty).
+    assert mock_validate.call_count == len(data)
+    for call, record in zip(mock_validate.call_args_list, data):
+        # Ensure each call receives the exact record dictionary.
+        assert call[0][0] == record
+
+
+@pytest.mark.parametrize(
+    ""data, metric, weight"",
+    [
+        # ``data`` is not a list.
+        ({""score"": 10}, ""score"", None),
+        # An element inside ``data`` is not a dict.
+        ([{""score"": 10}, ""not_a_dict""], ""score"", None),
+        # Metric value is not numeric.
+        ([{""score"": ""ten""}], ""score"", None),
+    ],
+)
+def test_aggregate_metrics_type_error(data: Any, metric: str, weight: Optional[float]):
+    """"""
+    Ensure ``TypeError`` is raised for invalid input types.
+    """"""
+    with patch(""mymodule.validate_record""):
+        with pytest.raises(TypeError):
+            aggregate_metrics(data, metric=metric, weight=weight)
+
+
+@pytest.mark.parametrize(
+    ""data, metric, weight"",
+    [
+        # Missing required metric key.
+        ([{""value"": 10}], ""score"", None),
+        # Per‑record weight is non‑positive.
+        ([{""score"": 10, ""weight"": 0}], ""score"", None),
+        # Global weight is non‑positive.
+        ([{""score"": 10}], ""score"", 0),
+    ],
+)
+def test_aggregate_metrics_value_error(data: List[Dict[str, Any]], metric: str, weight: Optional[float]):
+    """"""
+    Ensure ``ValueError`` is raised for missing metrics or non‑positive weights.
+    """"""
+    with patch(""mymodule.validate_record""):
+        with pytest.raises(ValueError):
+            aggregate_metrics(data, metric=metric, weight=weight)",,
+"def process_transactions(
+    transactions: List[Dict[str, Any]],
+    db_client: Any,
+    cache: Any,
+    validator: Callable[[Dict[str, Any]], bool],
+    *,
+    max_batch_size: int = 1000,
+    retry_interval: float = 0.5,
+) -> Tuple[int, List[int]]:
+    """"""
+    Validate, cache, and batch‑insert a collection of financial transactions into a database.
+
+    Args:
+        transactions (List[Dict[str, Any]]): A list where each element is a transaction record
+            containing at least the keys ``id`` (int), ``amount`` (Decimal), ``currency`` (str),
+            and ``timestamp`` (datetime). The list may be large and will be processed in
+            batches of ``max_batch_size``.
+        db_client (Any): Database client exposing ``insert_batch(batch: List[Dict]) -> None``.
+            The method may raise ``DatabaseError`` on failure.
+        cache (Any): Cache client offering ``get(key: str) -> Any`` and ``set(key: str, value: Any, ttl: int) -> None``.
+            Used to memoize previously processed transaction IDs.
+        validator (Callable[[Dict[str, Any]], bool]): Function that returns ``True`` if a transaction
+            passes business‑rule validation; may raise ``ValidationError``.
+        max_batch_size (int, optional): Maximum number of transactions to send to ``db_client`` in a single
+            batch. Must be a positive integer. Defaults to ``1000``.
+        retry_interval (float, optional): Seconds to wait between retry attempts when a batch insertion fails.
+            Must be non‑negative. Defaults to ``0.5``.
+
+    Returns:
+        Tuple[int, List[int]]: A tuple where the first element is the total number of successfully
+        inserted transactions and the second element is a list of transaction IDs that could not be
+        inserted after exhausting retries.
+
+    Raises:
+        TypeError: If ``transactions`` is not a list or contains non‑dict elements.
+        ValueError: If any transaction dict is missing required keys or has malformed values.
+        ValidationError: Propagated from the ``validator`` when a transaction fails validation.
+        DatabaseError: If ``db_client.insert_batch`` fails after the configured retries.
+        RuntimeError: If cache operations (``get``/``set``) raise unexpected exceptions.
+
+    # Dependencies: db_client.insert_batch(), cache.get(), cache.set(), validator()
+    """"""","import pytest
+from unittest.mock import Mock, patch, call
+
+# Adjust the import path to where ``process_transactions`` is defined.
+from module_under_test import process_transactions
+
+# Custom exception classes to match the docstring expectations.
+class ValidationError(Exception):
+    pass
+
+
+class DatabaseError(Exception):
+    pass
+
+
+@pytest.fixture
+def db_client_mock():
+    """"""Mock database client with an ``insert_batch`` method.""""""
+    client = Mock()
+    client.insert_batch = Mock()
+    return client
+
+
+@pytest.fixture
+def cache_mock():
+    """"""Mock cache client with ``get`` and ``set`` methods.""""""
+    cache = Mock()
+    cache.get = Mock()
+    cache.set = Mock()
+    return cache
+
+
+@pytest.fixture
+def validator_mock():
+    """"""Mock validator that returns ``True`` by default.""""""
+    validator = Mock()
+    validator.return_value = True
+    return validator
+
+
+@pytest.mark.parametrize(
+    ""transactions, batch_side_effects, expected_insert_calls"",
+    [
+        # All transactions succeed on first try, single batch.
+        (
+            [
+                {""id"": 1, ""amount"": 10, ""currency"": ""USD"", ""timestamp"": ""2021-01-01""},
+                {""id"": 2, ""amount"": 20, ""currency"": ""EUR"", ""timestamp"": ""2021-01-02""},
+            ],
+            [None],  # no exception
+            1,
+        ),
+        # Two batches, first batch fails once then succeeds, second batch succeeds.
+        (
+            [
+                {""id"": 1, ""amount"": 10, ""currency"": ""USD"", ""timestamp"": ""2021-01-01""},
+                {""id"": 2, ""amount"": 20, ""currency"": ""EUR"", ""timestamp"": ""2021-01-02""},
+                {""id"": 3, ""amount"": 30, ""currency"": ""GBP"", ""timestamp"": ""2021-01-03""},
+            ],
+            [DatabaseError(""temp""), None, None],  # first call fails, then succeeds
+            3,  # three total calls (retry + second batch)
+        ),
+    ],
+)
+def test_process_transactions_success(
+    db_client_mock,
+    cache_mock,
+    validator_mock,
+    transactions,
+    batch_side_effects,
+    expected_insert_calls,
+):
+    """"""
+    Verify successful processing, correct batching, cache usage and retry handling.
+    """"""
+    # Cache miss for every transaction id.
+    cache_mock.get.return_value = None
+
+    # Configure insert_batch side effects to simulate retry behavior.
+    db_client_mock.insert_batch.side_effect = batch_side_effects
+
+    # Patch sleep to avoid real waiting.
+    with patch(""module_under_test.time.sleep"", return_value=None):
+        inserted, failed_ids = process_transactions(
+            transactions,
+            db_client=db_client_mock,
+            cache=cache_mock,
+            validator=validator_mock,
+            max_batch_size=2,
+            retry_interval=0,
+        )
+
+    # All transactions should be reported as successfully inserted.
+    assert inserted == len(transactions)
+    assert failed_ids == []
+
+    # Cache ``get`` should be called once per transaction id.
+    expected_get_calls = [call(str(tx[""id""])) for tx in transactions]
+    assert cache_mock.get.call_args_list == expected_get_calls
+
+    # Cache ``set`` should be called for each processed transaction.
+    expected_set_calls = [
+        call(str(tx[""id""]), True, ttl=3600) for tx in transactions
+    ]
+    assert cache_mock.set.call_args_list == expected_set_calls
+
+    # ``validator`` should be called for each transaction.
+    assert validator_mock.call_count == len(transactions)
+
+    # Verify the number of insert_batch calls matches expectation.
+    assert db_client_mock.insert_batch.call_count == expected_insert_calls
+
+
+@pytest.mark.parametrize(
+    ""transactions, cache_side_effect, validator_side_effect, db_side_effect, expected_exc"",
+    [
+        # TypeError: transactions is not a list
+        (
+            {""id"": 1},
+            None,
+            None,
+            None,
+            TypeError,
+        ),
+        # TypeError: list contains a non‑dict element
+        (
+            [{""id"": 1}, ""not a dict""],
+            None,
+            None,
+            None,
+            TypeError,
+        ),
+        # ValueError: missing required key 'id'
+        (
+            [{""amount"": 10, ""currency"": ""USD"", ""timestamp"": ""2021-01-01""}],
+            None,
+            None,
+            None,
+            ValueError,
+        ),
+        # ValidationError propagated from validator
+        (
+            [{""id"": 1, ""amount"": 10, ""currency"": ""USD"", ""timestamp"": ""2021-01-01""}],
+            None,
+            ValidationError(""invalid""),
+            None,
+            ValidationError,
+        ),
+        # RuntimeError from cache.get
+        (
+            [{""id"": 1, ""amount"": 10, ""currency"": ""USD"", ""timestamp"": ""2021-01-01""}],
+            RuntimeError(""cache fail""),
+            None,
+            None,
+            RuntimeError,
+        ),
+        # DatabaseError after retries exhausted
+        (
+            [{""id"": 1, ""amount"": 10, ""currency"": ""USD"", ""timestamp"": ""2021-01-01""}],
+            None,
+            None,
+            DatabaseError(""db fail""),
+            DatabaseError,
+        ),
+    ],
+)
+def test_process_transactions_errors(
+    db_client_mock,
+    cache_mock,
+    validator_mock,
+    transactions,
+    cache_side_effect,
+    validator_side_effect,
+    db_side_effect,
+    expected_exc,
+):
+    """"""
+    Test that various input and external errors raise the appropriate exceptions.
+    """"""
+    # Configure cache.get side effect if specified.
+    if cache_side_effect is not None:
+        cache_mock.get.side_effect = cache_side_effect
+    else:
+        cache_mock.get.return_value = None
+
+    # Configure validator side effect.
+    if validator_side_effect is not None:
+        validator_mock.side_effect = validator_side_effect
+    else:
+        validator_mock.return_value = True
+
+    # Configure db_client insert_batch side effect.
+    if db_side_effect is not None:
+        db_client_mock.insert_batch.side_effect = db_side_effect
+    else:
+        db_client_mock.insert_batch.return_value = None
+
+    # Patch sleep to avoid delay during retry attempts.
+    with patch(""module_under_test.time.sleep"", return_value=None):
+        with pytest.raises(expected_exc):
+            process_transactions(
+                transactions,
+                db_client=db_client_mock,
+                cache=cache_mock,
+                validator=validator_mock,
+                max_batch_size=10,
+                retry_interval=0,
+            )
+
+    # When a RuntimeError originates from cache, ensure no further calls were made.
+    if expected_exc is RuntimeError:
+        cache_mock.set.assert_not_called()
+        db_client_mock.insert_batch.assert_not_called()
+        validator_mock.assert_not_called()
+```",,
+"def schedule_task(task_name: str, schedule_time: datetime, scheduler: Any) -> bool:
+    """"""
+    Register a task with an external scheduler service to be executed at a specific time.
+
+    Args:
+        task_name (str): Human‑readable identifier for the task. Must be a non‑empty string.
+        schedule_time (datetime): The datetime at which the task should be run. Must be in the future.
+        scheduler (Any): An external scheduler client exposing an ``add_task(name: str, run_at: datetime) -> bool``
+            method that returns ``True`` on success and may raise ``ConnectionError`` on failure.
+
+    Returns:
+        bool: ``True`` if the task was successfully scheduled; ``False`` otherwise.
+
+    Raises:
+        TypeError: If ``task_name`` is not a string or ``schedule_time`` is not a ``datetime`` instance.
+        ValueError: If ``task_name`` is empty or ``schedule_time`` is not in the future.
+        ConnectionError: If the scheduler client cannot communicate with the scheduling service.
+
+    # Dependencies: scheduler.add_task(name: str, run_at: datetime) -> bool, logger.error(msg: str) -> None
+    """"""","import pytest
+from unittest.mock import Mock, patch
+from datetime import datetime, timedelta
+
+# Adjust the import path to where ``schedule_task`` is defined.
+from mymodule import schedule_task
+
+
+@pytest.mark.parametrize(
+    ""task_name, schedule_offset, scheduler_return, expected"",
+    [
+        # Normal case, scheduler returns True.
+        (""backup_job"", timedelta(minutes=10), True, True),
+        # Scheduler returns False (e.g., rejected).
+        (""cleanup"", timedelta(hours=1), False, False),
+    ],
+)
+def test_schedule_task_success(task_name, schedule_offset, scheduler_return, expected):
+    """"""
+    Verify that a task is scheduled correctly and the return value mirrors the scheduler's response.
+    """"""
+    future_time = datetime.now() + schedule_offset
+    scheduler_mock = Mock()
+    scheduler_mock.add_task.return_value = scheduler_return
+
+    with patch(""mymodule.logger"") as logger_mock:
+        result = schedule_task(task_name, future_time, scheduler_mock)
+
+    assert result is expected
+    scheduler_mock.add_task.assert_called_once_with(name=task_name, run_at=future_time)
+    # No error should be logged on successful paths.
+    logger_mock.error.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ""task_name, schedule_time"",
+    [
+        # task_name is not a string.
+        (123, datetime.now() + timedelta(minutes=5)),
+        # schedule_time is not a datetime.
+        (""task"", ""2023-01-01T00:00:00""),
+    ],
+)
+def test_schedule_task_type_error(task_name, schedule_time):
+    """"""
+    Ensure ``TypeError`` is raised for invalid argument types.
+    """"""
+    scheduler_mock = Mock()
+    with patch(""mymodule.logger""):
+        with pytest.raises(TypeError):
+            schedule_task(task_name, schedule_time, scheduler_mock)
+
+
+@pytest.mark.parametrize(
+    ""task_name, schedule_time, scheduler_side_effect, expected_exception"",
+    [
+        # Empty task name.
+        ("""", datetime.now() + timedelta(minutes=5), None, ValueError),
+        # schedule_time in the past.
+        (""valid_name"", datetime.now() - timedelta(minutes=1), None, ValueError),
+        # Scheduler communication failure.
+        (""valid_name"", datetime.now() + timedelta(minutes=5), ConnectionError(""unreachable""), ConnectionError),
+    ],
+)
+def test_schedule_task_error_cases(task_name, schedule_time, scheduler_side_effect, expected_exception):
+    """"""
+    Test ``ValueError`` for invalid input values and ``ConnectionError`` propagation from the scheduler.
+    """"""
+    scheduler_mock = Mock()
+    if scheduler_side_effect is not None:
+        scheduler_mock.add_task.side_effect = scheduler_side_effect
+    else:
+        # Return value is irrelevant when inputs are invalid; ensure no call is made.
+        scheduler_mock.add_task.return_value = True
+
+    with patch(""mymodule.logger"") as logger_mock:
+        if expected_exception is ConnectionError:
+            # Scheduler raises; function should propagate the exception.
+            with pytest.raises(ConnectionError):
+                schedule_task(task_name, schedule_time, scheduler_mock)
+            # Ensure the error was logged.
+            logger_mock.error.assert_called()
+        else:
+            # Input validation errors should raise before calling scheduler.add_task.
+            with pytest.raises(ValueError):
+                schedule_task(task_name, schedule_time, scheduler_mock)
+            scheduler_mock.add_task.assert_not_called()
+            logger_mock.error.assert_not_called()",,
+"def format_date_range(start: datetime, end: datetime, fmt: str = ""%Y-%m-%d"") -> str:
+    """"""
+    Convert a start and end datetime into a human‑readable range string.
+
+    Args:
+        start (datetime): The beginning of the range.
+        end (datetime): The end of the range; must be later than ``start``.
+        fmt (str, optional): ``datetime.strftime`` format string used for each date.
+            Defaults to ``""%Y-%m-%d""``.
+
+    Returns:
+        str: A string formatted as ``""{start_formatted} – {end_formatted}""`` using the given
+        ``fmt``. Example: ``""2023-01-01 – 2023-01-31""``.
+
+    Raises:
+        TypeError: If ``start`` or ``end`` is not a ``datetime`` instance, or ``fmt`` is not a string.
+        ValueError: If ``end`` is earlier than ``start`` or ``fmt`` is an invalid ``strftime`` pattern.
+    """"""","import pytest
+from datetime import datetime
+
+# Adjust the import path to where ``format_date_range`` is defined.
+from module_under_test import format_date_range
+
+
+@pytest.mark.parametrize(
+    ""start, end, fmt, expected"",
+    [
+        # Default format
+        (datetime(2023, 1, 1), datetime(2023, 1, 31), ""%Y-%m-%d"", ""2023-01-01 – 2023-01-31""),
+        # Custom format with full month name
+        (
+            datetime(2022, 12, 25),
+            datetime(2023, 1, 5),
+            ""%d %b %Y"",
+            ""25 Dec 2022 – 05 Jan 2023"",
+        ),
+        # Same day range
+        (
+            datetime(2021, 7, 14, 15, 30),
+            datetime(2021, 7, 14, 18, 45),
+            ""%Y/%m/%d %H:%M"",
+            ""2021/07/14 15:30 – 2021/07/14 18:45"",
+        ),
+    ],
+)
+def test_format_date_range_success(start, end, fmt, expected):
+    """"""
+    Verify that valid datetime inputs produce correctly formatted range strings.
+    """"""
+    result = format_date_range(start, end, fmt=fmt)
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    ""start, end, fmt, exc_type"",
+    [
+        # Non‑datetime start
+        (""2023-01-01"", datetime(2023, 1, 31), ""%Y-%m-%d"", TypeError),
+        # Non‑datetime end
+        (datetime(2023, 1, 1), 12345, ""%Y-%m-%d"", TypeError),
+        # fmt not a string
+        (datetime(2023, 1, 1), datetime(2023, 1, 31), 10, TypeError),
+    ],
+)
+def test_format_date_range_type_errors(start, end, fmt, exc_type):
+    """"""
+    Ensure ``TypeError`` is raised when arguments have incorrect types.
+    """"""
+    with pytest.raises(exc_type):
+        format_date_range(start, end, fmt=fmt)
+
+
+@pytest.mark.parametrize(
+    ""start, end, fmt, exc_type"",
+    [
+        # End earlier than start
+        (datetime(2023, 2, 1), datetime(2023, 1, 31), ""%Y-%m-%d"", ValueError),
+        # Invalid strftime pattern
+        (datetime(2023, 1, 1), datetime(2023, 1, 31), ""%Q-%m-%d"", ValueError),
+    ],
+)
+def test_format_date_range_value_errors(start, end, fmt, exc_type):
+    """"""
+    Verify ``ValueError`` is raised for logical errors or malformed format strings.
+    """"""
+    with pytest.raises(exc_type):
+        format_date_range(start, end, fmt=fmt)",,
+"def send_email(recipient: str, subject: str, body: str, *, smtp_client: Any, logger: Any = None) -> bool:
+    """"""
+    Send an email message using a provided SMTP client and optionally log the operation.
+
+    Args:
+        recipient (str): Email address of the recipient. Must contain an ``@`` symbol.
+        subject (str): Subject line of the email. Cannot be empty.
+        body (str): Plain‑text body of the email. Can be empty.
+        smtp_client (Any): An object exposing a ``sendmail(sender: str, recipient: str, message: str) -> None`` method.
+            The ``sender`` address is assumed to be configured inside the client.
+        logger (Any, optional): Logger object with an ``info(msg: str)`` method. If provided, a log entry is written
+            after the email is successfully sent. Defaults to ``None``.
+
+    Returns:
+        bool: ``True`` if the email was sent without raising an exception, ``False`` otherwise.
+
+    Raises:
+        ValueError: If ``recipient`` is not a valid email address or ``subject`` is empty.
+        TypeError: If any of the arguments are not of the expected type.
+        ConnectionError: If the SMTP client fails to connect to the mail server.
+        RuntimeError: If ``smtp_client.sendmail`` raises an unexpected exception.
+
+    # Dependencies: smtp_client.sendmail(), logger.info()
+    """"""","import pytest
+from unittest.mock import Mock
+
+# Adjust the import path to where ``send_email`` is defined.
+from email_utils import send_email
+
+
+@pytest.mark.parametrize(
+    ""recipient,subject,body,provide_logger,expected_logger_calls"",
+    [
+        (""user@example.com"", ""Welcome"", ""Hello!"", True, 1),
+        (""admin@test.org"", ""Notice"", """", True, 1),
+        (""team@company.net"", ""Update"", ""Details"", False, 0),  # logger omitted
+    ],
+)
+def test_send_email_success(
+    recipient,
+    subject,
+    body,
+    provide_logger,
+    expected_logger_calls,
+):
+    """"""Successful email sending with and without a logger.""""""
+    smtp_mock = Mock()
+    smtp_mock.sendmail.return_value = None
+
+    logger_mock = Mock() if provide_logger else None
+
+    result = send_email(
+        recipient,
+        subject,
+        body,
+        smtp_client=smtp_mock,
+        logger=logger_mock,
+    )
+
+    assert result is True
+    smtp_mock.sendmail.assert_called_once()
+    # verify arguments passed to sendmail (sender is determined by client, we only check recipient and message)
+    args = smtp_mock.sendmail.call_args[0]
+    assert args[1] == recipient  # recipient argument
+    # basic sanity check that the composed message contains subject and body
+    composed_message = args[2]
+    assert subject in composed_message
+    assert body in composed_message
+
+    if logger_mock:
+        logger_mock.info.assert_called_once()
+    else:
+        # when logger is None, nothing to call
+        assert expected_logger_calls == 0
+
+
+@pytest.mark.parametrize(
+    ""recipient,subject,body,smtp_client,logger,expected_exc"",
+    [
+        # Invalid recipient formats -> ValueError
+        (""invalid-email"", ""Subject"", ""Body"", Mock(), None, ValueError),
+        (""noatsymbol.com"", ""Subject"", ""Body"", Mock(), None, ValueError),
+        # Empty subject -> ValueError
+        (""user@example.com"", """", ""Body"", Mock(), None, ValueError),
+        # Wrong types -> TypeError
+        (123, ""Subject"", ""Body"", Mock(), None, TypeError),          # recipient not str
+        (""user@example.com"", 456, ""Body"", Mock(), None, TypeError),  # subject not str
+        (""user@example.com"", ""Subject"", 789, Mock(), None, TypeError),  # body not str
+        (""user@example.com"", ""Subject"", ""Body"", ""not_a_client"", None, TypeError),  # smtp_client not mock-like
+        (""user@example.com"", ""Subject"", ""Body"", Mock(), ""not_a_logger"", TypeError),  # logger not mock-like
+    ],
+)
+def test_send_email_invalid_inputs(
+    recipient,
+    subject,
+    body,
+    smtp_client,
+    logger,
+    expected_exc,
+):
+    """"""Verify that invalid arguments raise the appropriate exceptions.""""""
+    with pytest.raises(expected_exc):
+        send_email(
+            recipient,
+            subject,
+            body,
+            smtp_client=smtp_client,
+            logger=logger,
+        )
+
+
+@pytest.mark.parametrize(
+    ""exception_to_raise,expected_exception_type"",
+    [
+        (ConnectionError(""SMTP down""), ConnectionError),
+        (RuntimeError(""Unexpected failure""), RuntimeError),
+    ],
+)
+def test_send_email_smtp_exceptions(exception_to_raise, expected_exception_type):
+    """"""SMTP client errors should be propagated as documented exceptions.""""""
+    smtp_mock = Mock()
+    smtp_mock.sendmail.side_effect = exception_to_raise
+
+    logger_mock = Mock()
+
+    with pytest.raises(expected_exception_type):
+        send_email(
+            ""user@example.com"",
+            ""Subject"",
+            ""Body"",
+            smtp_client=smtp_mock,
+            logger=logger_mock,
+        )
+
+    # sendmail should have been attempted once
+    smtp_mock.sendmail.assert_called_once()
+    # logger should not be called when sending fails
+    logger_mock.info.assert_not_called()",,
