@@ -1,28 +1,23 @@
 base:
   task: question-answering
-  student_model_name: Qwen3-8B
-  teacher_model_name: openai.gpt-oss-120b
-  
+  student_model_name: Qwen3-4B-Instruct-2507
+  teacher_model_name: deepseek.v3.1
 
 tuning:
+  learning_rate: 3e-5
+  learning_rate_scheduler: cosine
+  weight_decay: 0.01
+  warmup_ratio: 0.1
   use_lora: true
   lora_r: 64
-  lora_alpha_multiplier: 1
-  num_train_epochs: 4
-  learning_rate: 4e-5
-  learning_rate_scheduler: cosine
-  warmup_ratio: 0.05
-  weight_decay: 0.01
-  per_device_train_batch_size: 1
-  per_device_eval_batch_size: 1
-  train_eval_split: 0.2
+  lora_alpha_multiplier: 2
+  num_train_epochs: 5
+  train_eval_split: 0.15
 
 evaluation:
-  num_few_shot_examples: 3
-  llm_as_a_judge_model_name: deepseek.v3.1 
+  num_few_shot_examples: 2
 
 synthgen:
   generation_target: 10000
+  generation_in_single_call: 3
   teacher_temperature: 0.6
-
-

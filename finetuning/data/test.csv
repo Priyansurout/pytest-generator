@@ -1,1759 +1,210 @@
-question,answer,context,reasoning
-"def sync_user_profiles(user_ids: Iterable[int], db_session: Any, http_client: Any, *, retry: int = 3) -> Mapping[int, str]:
+question,answer,context,"reasoning"
+"def hash_password(password: str, hasher) -> str:
     """"""
-    Synchronize user profile information from a remote service into the local database.
-
+    Hash a password securely.
+    
     Args:
-        user_ids: An iterable of user identifiers to synchronize.
-        db_session: An active database session object that provides ``query`` and ``add`` methods, and a
-            ``commit`` method to persist changes.
-        http_client: An HTTP client exposing a ``get(url: str, timeout: int)`` method that returns a response
-            object with ``status_code`` and ``json()`` attributes.
-        retry: Number of retry attempts for transient HTTP errors before giving up.
-
+        password: Plain text password
+        hasher: Password hashing function
+    
     Returns:
-        A mapping from each user ID to a status string indicating the outcome:
-        ``'created'`` if a new record was inserted,
-        ``'updated'`` if an existing record was modified,
-        ``'failed'`` if synchronization could not be completed.
-
+        Hashed password string
+    
     Raises:
-        ConnectionError: If the HTTP request fails after the specified number of retries.
-        RuntimeError: If the database transaction cannot be committed.
-        ValueError: If any ``user_id`` is not a positive integer.
-
-    # Dependencies: fetch_remote_profile(user_id: int, client) -> dict, log_error(message: str) -> None
-    """"""","import pytest
-from unittest.mock import Mock, patch, call
-
-# Assuming the function is defined in a module named `module_under_test`
-from module_under_test import sync_user_profiles
-
-
-@pytest.fixture
-def db_session_mock():
-    """"""Create a mock DB session with query, add, and commit methods.""""""
-    session = Mock()
-    # query().filter_by(user_id=...).first() will be set per test
-    query = Mock()
-    session.query.return_value = query
-    query.filter_by.return_value = query
-    query.first = Mock()
-    session.add = Mock()
-    session.commit = Mock()
-    return session
-
-
-@pytest.fixture
-def http_client_mock():
-    """"""Create a mock HTTP client (not used directly because fetch_remote_profile is mocked).""""""
-    client = Mock()
-    client.get = Mock()
-    return client
-
-
-@patch(""module_under_test.log_error"")
-@patch(""module_under_test.fetch_remote_profile"")
-@pytest.mark.parametrize(
-    ""user_ids, existing_ids, remote_profiles, expected_mapping"",
-    [
-        # All new users => created
-        (
-            [10, 20],
-            set(),
-            {10: {""name"": ""Alice""}, 20: {""name"": ""Bob""}},
-            {10: ""created"", 20: ""created""},
-        ),
-        # Mixed existing and new => updated and created
-        (
-            [1, 2, 3],
-            {2},
-            {1: {""name"": ""Carol""}, 2: {""name"": ""Dave""}, 3: {""name"": ""Eve""}},
-            {1: ""created"", 2: ""updated"", 3: ""created""},
-        ),
-        # All existing => updated
-        (
-            [5, 6],
-            {5, 6},
-            {5: {""name"": ""Frank""}, 6: {""name"": ""Grace""}},
-            {5: ""updated"", 6: ""updated""},
-        ),
-    ],
-)
-def test_sync_user_profiles_success(
-    fetch_remote_profile_mock,
-    log_error_mock,
-    user_ids,
-    existing_ids,
-    remote_profiles,
-    expected_mapping,
-    db_session_mock,
-    http_client_mock,
-):
-    """"""
-    Test successful synchronization for various combinations of new and existing users.
-    """"""
-
-    # Configure fetch_remote_profile to return the provided profile dicts
-    def fetch_side_effect(user_id, client):
-        assert client is http_client_mock
-        return remote_profiles[user_id]
-
-    fetch_remote_profile_mock.side_effect = fetch_side_effect
-
-    # Configure db_session.query().filter_by(...).first()
-    def first_side_effect():
-        # The last call's argument determines which user_id is being looked up
-        call_args = db_session_mock.query.return_value.filter_by.call_args
-        user_id = call_args.kwargs[""user_id""]
-        return Mock() if user_id in existing_ids else None
-
-    db_session_mock.query.return_value.filter_by.return_value.first.side_effect = first_side_effect
-
-    result = sync_user_profiles(user_ids, db_session_mock, http_client_mock, retry=1)
-
-    assert result == expected_mapping
-
-    # Verify fetch_remote_profile called for each user_id
-    expected_calls = [call(uid, http_client_mock) for uid in user_ids]
-    assert fetch_remote_profile_mock.call_args_list == expected_calls
-
-    # Verify DB add was called for newly created users
-    added_user_ids = [uid for uid in user_ids if uid not in existing_ids]
-    assert db_session_mock.add.call_count == len(added_user_ids)
-
-    # Verify commit was called once
-    db_session_mock.commit.assert_called_once()
-
-    # No errors should be logged
-    log_error_mock.assert_not_called()
-
-
-@pytest.mark.parametrize(
-    ""user_ids, side_effect, exception_type"",
-    [
-        # ValueError for non‑positive user_id
-        ([-1, 2], None, ValueError),
-        # ConnectionError after retries
-        ([3], ConnectionError(""failed""), ConnectionError),
-        # RuntimeError on commit failure
-        ([4], RuntimeError(""commit failed""), RuntimeError),
-    ],
-)
-@patch(""module_under_test.log_error"")
-@patch(""module_under_test.fetch_remote_profile"")
-def test_sync_user_profiles_exceptions(
-    fetch_remote_profile_mock,
-    log_error_mock,
-    user_ids,
-    side_effect,
-    exception_type,
-    db_session_mock,
-    http_client_mock,
-):
-    """"""
-    Test that the function raises the appropriate exceptions for invalid input,
-    HTTP failures after retries, and database commit errors.
-    """"""
-
-    # ValueError case: function validates before any external calls
-    if exception_type is ValueError:
-        with pytest.raises(ValueError):
-            sync_user_profiles(user_ids, db_session_mock, http_client_mock, retry=1)
-        # No external calls should happen
-        fetch_remote_profile_mock.assert_not_called()
-        log_error_mock.assert_not_called()
-        return
-
-    # For HTTP failure, make fetch_remote_profile raise the side_effect
-    if exception_type is ConnectionError:
-        fetch_remote_profile_mock.side_effect = side_effect
-        with pytest.raises(ConnectionError):
-            sync_user_profiles(user_ids, db_session_mock, http_client_mock, retry=2)
-        # Ensure fetch was attempted the correct number of times (retry + 1)
-        assert fetch_remote_profile_mock.call_count == 3  # initial + 2 retries
-        log_error_mock.assert_called()  # error should be logged
-        return
-
-    # For RuntimeError on commit, simulate successful fetch and DB query,
-    # then force commit to raise.
-    if exception_type is RuntimeError:
-        fetch_remote_profile_mock.return_value = {""name"": ""Test""}
-        # Simulate that user does not exist (so add will be called)
-        db_session_mock.query.return_value.filter_by.return_value.first.return_value = None
-        db_session_mock.commit.side_effect = side_effect
-
-        with pytest.raises(RuntimeError):
-            sync_user_profiles(user_ids, db_session_mock, http_client_mock, retry=1)
-
-        # Verify that add was called before the failing commit
-        db_session_mock.add.assert_called()
-        log_error_mock.assert_called()
-        return
-
-
-@patch(""module_under_test.log_error"")
-@patch(""module_under_test.fetch_remote_profile"")
-def test_sync_user_profiles_retry_logic(
-    fetch_remote_profile_mock,
-    log_error_mock,
-    db_session_mock,
-    http_client_mock,
-):
-    """"""
-    Verify that retry logic triggers the correct number of attempts and logs errors
-    when transient HTTP errors occur.
-    """"""
-    user_ids = [7]
-    # First two attempts raise ConnectionError, third succeeds
-    fetch_remote_profile_mock.side_effect = [
-        ConnectionError(""temp fail""),
-        ConnectionError(""temp fail""),
-        {""name"": ""Recovered""},
-    ]
-
-    # Simulate that the user does not exist yet
-    db_session_mock.query.return_value.filter_by.return_value.first.return_value = None
-
-    result = sync_user_profiles(user_ids, db_session_mock, http_client_mock, retry=2)
-
-    assert result == {7: ""created""}
-    # Three calls total: initial + 2 retries
-    assert fetch_remote_profile_mock.call_count == 3
-    # Errors should have been logged for the first two failures
-    assert log_error_mock.call_count == 2
-    # Ensure the record was added and committed
-    db_session_mock.add.assert_called()
-    db_session_mock.commit.assert_called_once()",,
-"def merge_sorted_lists(list_a: list[int], list_b: list[int]) -> list[int]:
-    """"""
-    Merge two individually sorted integer lists into a single sorted list.
-
-    Args:
-        list_a (list[int]): First sorted list of integers.
-        list_b (list[int]): Second sorted list of integers.
-
-    Returns:
-        list[int]: A new list containing all elements from ``list_a`` and ``list_b`` in ascending order.
-
-    Raises:
-        TypeError: If either ``list_a`` or ``list_b`` is not a list.
-    """"""","import pytest
-from solution import merge_sorted_lists
-
-
-@pytest.mark.parametrize(
-    ""list_a,list_b,expected"",
-    [
-        ([1, 3, 5], [2, 4, 6], [1, 2, 3, 4, 5, 6]),
-        ([], [1, 2], [1, 2]),
-        ([-3, -1, 0], [-2, 5], [-3, -2, -1, 0, 5]),
-    ],
-)
-def test_merge_sorted_lists_success(list_a, list_b, expected):
-    result = merge_sorted_lists(list_a, list_b)
-    assert result == expected
-    # Ensure original lists are not modified
-    assert list_a == list_a  # noqa: E712
-    assert list_b == list_b  # noqa: E712
-
-
-@pytest.mark.parametrize(
-    ""list_a,list_b"",
-    [
-        (""not a list"", [1, 2]),
-        ([1, 2], ""also not a list""),
-        (""a"", ""b""),
-    ],
-)
-def test_merge_sorted_lists_type_error(list_a, list_b):
-    with pytest.raises(TypeError):
-        merge_sorted_lists(list_a, list_b)",,
-"def encrypt_data(data: bytes, key: bytes, mode: str = 'CBC') -> bytes:
-    """"""
-    Encrypt binary data using the supplied key and encryption mode.
-
-    Args:
-        data (bytes): Plaintext bytes to be encrypted. Must be non‑empty.
-        key (bytes): Encryption key. Length must match the requirements of the selected mode.
-        mode (str, optional): Encryption mode, e.g., 'CBC' or 'GCM'. Defaults to 'CBC'.
-
-    Returns:
-        bytes: Ciphertext resulting from encrypting ``data`` with ``key`` in the specified ``mode``.
-
-    Raises:
-        TypeError: If ``data`` or ``key`` is not of type ``bytes``.
-        ValueError: If ``mode`` is unsupported or ``key`` length is invalid for the chosen mode.
-        RuntimeError: If the underlying encryption library fails to produce output.
-
-    # Dependencies: get_random_iv()
-    """"""","import pytest
-from unittest.mock import patch
-
-from solution import encrypt_data
-
-
-@pytest.mark.parametrize(
-    ""data,key,mode"",
-    [
-        # CBC mode with 16‑byte key
-        (b""hello world!"", b""0123456789ABCDEF"", ""CBC""),
-        # GCM mode with 16‑byte key (example length)
-        (b""test data"", b""fedcba9876543210"", ""GCM""),
-        # Default mode (CBC) without specifying mode argument
-        (b""sample"", b""ABCDEFGHIJKLMNOP"", None),
-    ],
-)
-def test_encrypt_data_success(data, key, mode):
-    """"""Verify that encryption returns bytes and that the IV generator is used.""""""
-    iv_value = b""iv1234567890abcd""  # deterministic IV for testing
-
-    with patch(""solution.get_random_iv"", return_value=iv_value) as mock_iv:
-        # Call with mode omitted when parameter is None
-        result = encrypt_data(data, key, mode) if mode is not None else encrypt_data(data, key)
-
-    assert isinstance(result, bytes)
-    # Ciphertext should differ from the plaintext
-    assert result != data
-    # Ensure the IV helper was called exactly once
-    mock_iv.assert_called_once()
-
-
-@pytest.mark.parametrize(
-    ""data,key,mode,expected_exception"",
-    [
-        # Non‑bytes data
-        (""not bytes"", b""0123456789ABCDEF"", ""CBC"", TypeError),
-        # Non‑bytes key
-        (b""valid data"", ""not bytes key"", ""CBC"", TypeError),
-        # Unsupported mode
-        (b""data"", b""0123456789ABCDEF"", ""XYZ"", ValueError),
-        # Invalid key length for CBC (key too short)
-        (b""data"", b""short"", ""CBC"", ValueError),
-        # Invalid key length for GCM (key too short)
-        (b""data"", b""short"", ""GCM"", ValueError),
-    ],
-)
-def test_encrypt_data_invalid_inputs(data, key, mode, expected_exception):
-    """"""Test that TypeError and ValueError are raised for bad inputs.""""""
-    with patch(""solution.get_random_iv"") as mock_iv:
-        # mock_iv is not expected to be called for these error paths
-        with pytest.raises(expected_exception):
-            encrypt_data(data, key, mode)
-
-
-def test_encrypt_data_runtime_error():
-    """"""Simulate a failure in the underlying encryption process.""""""
-    data = b""payload""
-    key = b""0123456789ABCDEF""  # assume valid length
-    iv_value = b""iv1234567890abcd""
-
-    # Force the IV generator to work, but make the encryption step raise RuntimeError.
-    with patch(""solution.get_random_iv"", return_value=iv_value):
-        with patch(""solution.encrypt_data"", side_effect=RuntimeError(""encryption failure"")):
-            with pytest.raises(RuntimeError):
-                encrypt_data(data, key, ""CBC"")",,
-"def parse_config(file_path: str, *, validator: Any) -> dict:
-    """"""
-    Load a JSON configuration file, validate its contents, and return the parsed data.
-
-    Args:
-        file_path (str): Path to the JSON configuration file to be read.
-        validator (Any, optional): An object exposing a ``validate(data: dict) -> None`` method.
-            The method should raise ``ValueError`` if the configuration does not meet
-            the required schema.
-
-    Returns:
-        dict: The validated configuration data loaded from ``file_path``.
-
-    Raises:
-        FileNotFoundError: If ``file_path`` does not point to an existing file.
-        json.JSONDecodeError: If the file contents are not valid JSON.
-        ValueError: If the validator reports a schema violation.
-        RuntimeError: If any unexpected I/O error occurs while reading the file.
-
-    # Dependencies: validator.validate(), json.load()
-    """"""","import pytest
-from unittest.mock import Mock, patch, call
-import json
-
-# Adjust the import path to where ``parse_config`` is defined.
-from module_under_test import parse_config
-
-
-@pytest.fixture
-def validator_mock():
-    """"""Create a mock validator with a ``validate`` method.""""""
-    validator = Mock()
-    validator.validate.return_value = None
-    return validator
-
-
-@patch(""module_under_test.json.load"")
-@patch(""builtins.open"")
-def test_parse_config_success(mock_open, mock_json_load, validator_mock):
-    """"""
-    Verify that a valid JSON file is read, validated, and returned.
-    """"""
-    # Parameterize three different configurations
-    test_cases = [
-        (""config1.json"", {""mode"": ""dev"", ""debug"": True}),
-        (""config2.json"", {""mode"": ""prod"", ""debug"": False, ""threshold"": 0.75}),
-        (""config3.json"", {}),  # empty dict is still valid
-    ]
-
-    for file_path, json_content in test_cases:
-        # Setup mocks for each iteration
-        mock_file = Mock()
-        mock_open.return_value.__enter__.return_value = mock_file
-        mock_json_load.return_value = json_content
-
-        result = parse_config(file_path, validator=validator_mock)
-
-        assert result == json_content
-        # open should be called with the provided path and read mode
-        mock_open.assert_called_with(file_path, ""r"")
-        # json.load should be called with the file handle returned by open
-        mock_json_load.assert_called_once_with(mock_file)
-        # validator.validate should receive the parsed dict
-        validator_mock.validate.assert_called_once_with(json_content)
-
-        # Reset call history for next iteration
-        mock_open.reset_mock()
-        mock_json_load.reset_mock()
-        validator_mock.validate.reset_mock()
-
-
-@pytest.mark.parametrize(
-    ""file_path,open_side_effect,json_load_side_effect,validator_side_effect,expected_exception"",
-    [
-        # File not found
-        (""missing.json"", FileNotFoundError, None, None, FileNotFoundError),
-        # Invalid JSON format
-        (""bad.json"", None, json.JSONDecodeError(""msg"", doc="""", pos=0), None, json.JSONDecodeError),
-        # Validator reports schema violation
-        (""config.json"", None, {""key"": ""value""}, ValueError(""schema error""), ValueError),
-        # Unexpected I/O error during file read
-        (""io_error.json"", OSError(""read error""), None, None, RuntimeError),
-    ],
-)
-@patch(""module_under_test.json.load"")
-@patch(""builtins.open"")
-def test_parse_config_exceptions(
-    mock_open,
-    mock_json_load,
-    file_path,
-    open_side_effect,
-    json_load_side_effect,
-    validator_side_effect,
-    expected_exception,
-    validator_mock,
-):
-    """"""
-    Test that the function raises the correct exceptions for each failure mode.
-    """"""
-    # Configure open side effect
-    if open_side_effect is not None:
-        mock_open.side_effect = open_side_effect
-    else:
-        # Successful open returns a mock file object
-        mock_file = Mock()
-        mock_open.return_value.__enter__.return_value = mock_file
-
-    # Configure json.load side effect
-    if json_load_side_effect is not None:
-        mock_json_load.side_effect = json_load_side_effect
-    else:
-        mock_json_load.return_value = {""dummy"": ""data""}
-
-    # Configure validator.validate side effect
-    if validator_side_effect is not None:
-        validator_mock.validate.side_effect = validator_side_effect
-    else:
-        validator_mock.validate.return_value = None
-
-    if expected_exception is RuntimeError:
-        # The implementation is expected to wrap unexpected I/O errors in RuntimeError
-        with pytest.raises(RuntimeError):
-            parse_config(file_path, validator=validator_mock)
-    else:
-        with pytest.raises(expected_exception):
-            parse_config(file_path, validator=validator_mock)
-
-    # Verify that mocks were called appropriately based on the failure point
-    if open_side_effect is None:
-        mock_open.assert_called_once_with(file_path, ""r"")
-    else:
-        mock_open.assert_called_once_with(file_path, ""r"")
-
-    if open_side_effect is None and json_load_side_effect is None:
-        mock_json_load.assert_called_once()
-        validator_mock.validate.assert_called_once()
-    elif json_load_side_effect is not None:
-        mock_json_load.assert_called_once()
-    else:
-        # If validator raised, json.load succeeded
-        validator_mock.validate.assert_called_once()",,
-"def fetch_and_cache_user_data(user_id: int, cache: Any, api_client: Any, *, ttl: int = 3600) -> Dict[str, Any]:
-    """"""
-    Retrieve user information from a remote service and store it in a cache for future access.
-
-    Args:
-        user_id (int): Identifier of the user to fetch. Must be a positive integer.
-        cache (Any): Cache object exposing ``get(key: str) -> Any`` and ``set(key: str, value: Any, ttl: int)`` methods.
-        api_client (Any): HTTP client with a ``get_user(user_id: int) -> dict`` method that contacts the remote user service.
-        ttl (int, optional): Time‑to‑live for the cached entry in seconds. Defaults to ``3600``.
-
-    Returns:
-        Dict[str, Any]: A dictionary representing the user profile as returned by the remote service.
-
-    Raises:
-        ValueError: If ``user_id`` is not a positive integer.
-        TypeError: If ``cache`` does not provide the required ``get``/``set`` methods or ``api_client`` lacks ``get_user``.
-        ConnectionError: If the remote service cannot be reached or returns a non‑200 status code.
-        RuntimeError: If caching the retrieved data fails for any reason.
-
-    # Dependencies: api_client.get_user(), cache.get(), cache.set()
+        ValueError: If password is too short
+    
+    # Dependencies: hasher()
     """"""","import pytest
 from unittest.mock import Mock
 
-from my_module import fetch_and_cache_user_data
+@pytest.mark.parametrize(""password,hashed"", [
+    (""secure_pass123"", ""$2b$12$abcd...""),
+    (""another_password"", ""$2b$12$xyz...""),
+])
+def test_hash_password(password, hashed):
+    mock_hasher = Mock(return_value=hashed)
+    result = hash_password(password, mock_hasher)
+    assert result == hashed
+    mock_hasher.assert_called_once_with(password)
 
-
-@pytest.mark.parametrize(
-    ""user_id,cache_get_return,api_user_data,expect_set,ttl"",
-    [
-        (
-            1,
-            None,  # cache miss
-            {""id"": 1, ""name"": ""Alice""},
-            True,
-            3600,
-        ),
-        (
-            2,
-            {""id"": 2, ""name"": ""Bob""},  # cache hit
-            {""id"": 2, ""name"": ""Bob""},
-            False,
-            1800,
-        ),
-    ],
-)
-def test_fetch_and_cache_user_data_success(user_id, cache_get_return, api_user_data, expect_set, ttl):
-    """"""Test successful retrieval from cache and from API with proper caching.""""""
-    # Prepare mocks
-    cache_mock = Mock()
-    cache_mock.get.return_value = cache_get_return
-    cache_mock.set.return_value = None
-
-    api_mock = Mock()
-    api_mock.get_user.return_value = api_user_data
-
-    result = fetch_and_cache_user_data(
-        user_id,
-        cache=cache_mock,
-        api_client=api_mock,
-        ttl=ttl,
-    )
-
-    assert result == api_user_data
-    # cache.get should always be called once with a string key
-    cache_mock.get.assert_called_once()
-    called_key = cache_mock.get.call_args[0][0]
-    assert isinstance(called_key, str)
-
-    if expect_set:
-        # When cache miss, API is called and result cached
-        api_mock.get_user.assert_called_once_with(user_id)
-        cache_mock.set.assert_called_once()
-        set_key, set_value, set_ttl = cache_mock.set.call_args[0]
-        assert set_key == called_key
-        assert set_value == api_user_data
-        assert set_ttl == ttl
-    else:
-        # When cache hit, API should not be called and set should not happen
-        api_mock.get_user.assert_not_called()
-        cache_mock.set.assert_not_called()
-
-
-@pytest.mark.parametrize(
-    ""user_id,cache_obj,api_obj,ttl,expected_exception"",
-    [
-        # ValueError for non‑positive user_id
-        (0, Mock(), Mock(), 3600, ValueError),
-        # TypeError when cache lacks required methods
-        (1, object(), Mock(), 3600, TypeError),
-        # TypeError when api_client lacks required method
-        (1, Mock(), object(), 3600, TypeError),
-        # ConnectionError propagated from api_client
-        (
-            3,
-            Mock(),
-            Mock(),
-            3600,
-            ConnectionError,
-        ),
-        # RuntimeError when caching fails
-        (4, Mock(), Mock(), 3600, RuntimeError),
-    ],
-)
-def test_fetch_and_cache_user_data_errors(user_id, cache_obj, api_obj, ttl, expected_exception):
-    """"""Test error handling for the various exception types declared in the docstring.""""""
-    # Configure mocks for specific scenarios
-    if isinstance(cache_obj, Mock):
-        cache_obj.get.return_value = None
-        cache_obj.set.return_value = None
-
-    if isinstance(api_obj, Mock):
-        if expected_exception is ConnectionError:
-            api_obj.get_user.side_effect = ConnectionError(""service unreachable"")
-        else:
-            api_obj.get_user.return_value = {""id"": user_id, ""name"": ""Test""}
-
-    # For RuntimeError scenario, make cache.set raise
-    if expected_exception is RuntimeError and isinstance(cache_obj, Mock):
-        cache_obj.set.side_effect = RuntimeError(""cache failure"")
-
-    with pytest.raises(expected_exception):
-        fetch_and_cache_user_data(
-            user_id,
-            cache=cache_obj,
-            api_client=api_obj,
-            ttl=ttl,
-        )",,
-"def send_email(recipient: str, subject: str, body: str, *, smtp_client: Any, retries: int = 2) -> bool:
-    """"""
-    Send an email message using a provided SMTP client.
-
-    Args:
-        recipient (str): Email address of the message recipient. Must contain an '@' symbol.
-        subject (str): Subject line of the email.
-        body (str): Plain‑text body of the email.
-        smtp_client (Any): An object exposing a ``sendmail`` method with the signature
-            ``sendmail(from_addr: str, to_addrs: List[str], msg: str)``.
-        retries (int, optional): Number of times to retry sending on transient failures.
-            Must be non‑negative. Defaults to ``2``.
-
-    Returns:
-        bool: ``True`` if the email was sent successfully, ``False`` otherwise.
-
-    Raises:
-        ValueError: If ``recipient`` is not a valid email address format.
-        ConnectionError: If the SMTP server cannot be reached after the specified number of retries.
-
-    # Dependencies: smtp_client.sendmail()
-    """"""","import pytest
-from unittest.mock import Mock
-
-# Adjust the import path to where `send_email` is defined.
-from module_under_test import send_email
-
-
-@pytest.fixture
-def smtp_client_mock():
-    """"""Create a mock SMTP client with a `sendmail` method.""""""
-    client = Mock()
-    client.sendmail = Mock()
-    return client
-
-
-@pytest.mark.parametrize(
-    ""retries, side_effects, expected_call_count"",
-    [
-        # Success on first attempt
-        (2, [None], 1),
-        # Failure on first attempt, success on second retry
-        (2, [ConnectionError(""temp failure""), None], 2),
-    ],
-)
-def test_send_email_success(
-    smtp_client_mock, retries, side_effects, expected_call_count
-):
-    """"""
-    Verify that a valid email is sent successfully and that retries are handled correctly.
-    """"""
-    recipient = ""user@example.com""
-    subject = ""Test Subject""
-    body = ""Hello, world!""
-
-    smtp_client_mock.sendmail.side_effect = side_effects
-
-    result = send_email(
-        recipient,
-        subject,
-        body,
-        smtp_client=smtp_client_mock,
-        retries=retries,
-    )
-
-    assert result is True
-    assert smtp_client_mock.sendmail.call_count == expected_call_count
-
-    # Ensure the recipient appears in the `to_addrs` argument of each call.
-    for call in smtp_client_mock.sendmail.call_args_list:
-        _, to_addrs, _ = call[0]
-        assert isinstance(to_addrs, list)
-        assert recipient in to_addrs
-
-
-@pytest.mark.parametrize(
-    ""retries, side_effects, expected_exception"",
-    [
-        # All attempts fail, should raise ConnectionError
-        (1, [ConnectionError(""cannot connect"")] * 2, ConnectionError),
-        # No retries allowed, immediate failure raises ConnectionError
-        (0, [ConnectionError(""cannot connect"")], ConnectionError),
-    ],
-)
-def test_send_email_failure_retries(
-    smtp_client_mock, retries, side_effects, expected_exception
-):
-    """"""
-    Verify that the function raises `ConnectionError` after exhausting retries.
-    """"""
-    recipient = ""user@example.com""
-    subject = ""Fail Test""
-    body = ""This will fail.""
-
-    smtp_client_mock.sendmail.side_effect = side_effects
-
-    with pytest.raises(expected_exception):
-        send_email(
-            recipient,
-            subject,
-            body,
-            smtp_client=smtp_client_mock,
-            retries=retries,
-        )
-
-    # The number of calls should equal retries + 1 (initial attempt + retries)
-    assert smtp_client_mock.sendmail.call_count == retries + 1
-
-
-def test_send_email_invalid_recipient(smtp_client_mock):
-    """"""
-    Ensure that an invalid email address raises `ValueError` and no SMTP call is made.
-    """"""
-    invalid_recipient = ""invalid-email""
-    subject = ""Subject""
-    body = ""Body""
-
+def test_hash_password_too_short():
+    mock_hasher = Mock()
     with pytest.raises(ValueError):
-        send_email(
-            invalid_recipient,
-            subject,
-            body,
-            smtp_client=smtp_client_mock,
-            retries=2,
-        )
-
-    # No attempt to send should be made
-    smtp_client_mock.sendmail.assert_not_called()",,
-"def generate_report(data: List[Dict[str, Any]], template: str, output_path: str, *, dry_run: bool = False) -> None:
-    """"""
-    Render a report from a list of record dictionaries using a Jinja2 template and optionally write it to disk.
-
-    Args:
-        data (List[Dict[str, Any]]): Collection of rows where each mapping represents a record. Keys are
-            column names and values are serializable objects. The list may be empty, in which case an
-            empty report is generated.
-        template (str): Path to a Jinja2 template file that defines the layout of the report. The file
-            must exist and be readable.
-        output_path (str): Destination file system path where the rendered report will be saved. If the
-            directory does not exist it will be created automatically.
-        dry_run (bool, optional): When ``True`` the function renders the report but does **not** write the
-            file to ``output_path``. Defaults to ``False``.
-
-    Returns:
-        None: The function writes the rendered content to ``output_path`` unless ``dry_run`` is ``True``.
-
-    Raises:
-        FileNotFoundError: If ``template`` does not point to an existing file.
-        PermissionError: If the process lacks permission to read the template or write to ``output_path``.
-        ValueError: If any element in ``data`` is not a dictionary or contains non‑serializable values.
-        OSError: If creating the output directory fails.
-
-    # Dependencies: render_template(template_path: str, context: dict) -> str, save_file(path: str, content: str) -> None
-    """"""","import pytest
-from unittest.mock import Mock, patch, call
-
-# Adjust the import path to where ``generate_report`` is defined.
-from report_module import generate_report
-
-
-@pytest.mark.parametrize(
-    ""data, dry_run, expected_save_calls"",
-    [
-        # Normal data, write to disk
-        ([{""id"": 1, ""name"": ""Alice""}, {""id"": 2, ""name"": ""Bob""}], False, 1),
-        # Empty data list, write to disk
-        ([], False, 1),
-        # Normal data, dry run (no file write)
-        ([{""col"": ""value""}], True, 0),
-    ],
-)
-@patch(""report_module.save_file"")
-@patch(""report_module.render_template"")
-def test_generate_report_success(
-    mock_render,
-    mock_save,
-    data,
-    dry_run,
-    expected_save_calls,
-):
-    """"""Successful rendering and (optionally) saving of a report.""""""
-    template_path = ""/fake/template.j2""
-    output_path = ""/tmp/report.txt""
-    rendered_content = ""rendered report""
-
-    mock_render.return_value = rendered_content
-
-    generate_report(data, template_path, output_path, dry_run=dry_run)
-
-    # render_template should always be called with the supplied template and a context dict
-    mock_render.assert_called_once()
-    args, kwargs = mock_render.call_args
-    assert args[0] == template_path
-    # second argument must be a dict containing the provided data
-    context = args[1]
-    assert isinstance(context, dict)
-    assert context.get(""data"") == data
-
-    # save_file is called only when not a dry run
-    assert mock_save.call_count == expected_save_calls
-    if expected_save_calls:
-        mock_save.assert_called_once_with(output_path, rendered_content)
-
-
-@pytest.mark.parametrize(
-    ""data, template_path, output_path, dry_run, setup_mocks, expected_exc, render_called, save_called"",
-    [
-        # Template file not found
-        (
-            [{""a"": 1}],
-            ""/missing/template.j2"",
-            ""/tmp/out.txt"",
-            False,
-            lambda m_render, m_save: m_render.side_effect = FileNotFoundError(""not found""),
-            FileNotFoundError,
-            True,
-            False,
-        ),
-        # Permission error reading template
-        (
-            [{""a"": 1}],
-            ""/no/perm/template.j2"",
-            ""/tmp/out.txt"",
-            False,
-            lambda m_render, m_save: m_render.side_effect = PermissionError(""read denied""),
-            PermissionError,
-            True,
-            False,
-        ),
-        # Invalid data element (not a dict)
-        (
-            [{""a"": 1}, ""not a dict""],
-            ""/fake/template.j2"",
-            ""/tmp/out.txt"",
-            False,
-            lambda m_render, m_save: None,
-            ValueError,
-            False,
-            False,
-        ),
-        # Permission error writing output
-        (
-            [{""a"": 1}],
-            ""/fake/template.j2"",
-            ""/protected/out.txt"",
-            False,
-            lambda m_render, m_save: (
-                m_render.return_value = ""rendered"",
-                setattr(m_save, ""side_effect"", PermissionError(""write denied"")),
-            ),
-            PermissionError,
-            True,
-            True,
-        ),
-        # OS error creating output directory
-        (
-            [{""a"": 1}],
-            ""/fake/template.j2"",
-            ""/unwritable/dir/out.txt"",
-            False,
-            lambda m_render, m_save: (
-                m_render.return_value = ""rendered"",
-                setattr(m_save, ""side_effect"", OSError(""mkdir failed"")),
-            ),
-            OSError,
-            True,
-            True,
-        ),
-    ],
-)
-@patch(""report_module.save_file"")
-@patch(""report_module.render_template"")
-def test_generate_report_exceptions(
-    mock_render,
-    mock_save,
-    data,
-    template_path,
-    output_path,
-    dry_run,
-    setup_mocks,
-    expected_exc,
-    render_called,
-    save_called,
-):
-    """"""Verify that documented exceptions are raised and external calls behave as expected.""""""
-    # Apply the per‑case mock configuration
-    setup_mocks(mock_render, mock_save)
-
-    with pytest.raises(expected_exc):
-        generate_report(data, template_path, output_path, dry_run=dry_run)
-
-    # Ensure render_template was (or was not) called according to the scenario
-    assert mock_render.called is render_called
-    # Ensure save_file was (or was not) called according to the scenario
-    assert mock_save.called is save_called
-
-    # When a ValueError is raised due to bad data, no external calls should happen
-    if expected_exc is ValueError:
-        mock_render.assert_not_called()
-        mock_save.assert_not_called()",,
-"def parse_csv(content: str, *, delimiter: str = ',', has_header: bool = True) -> List[Dict[str, str]]:
-    """"""
-    Parse CSV formatted string into a list of dictionaries representing rows.
-
-    Args:
-        content (str): The raw CSV data as a single string. Each line corresponds to a row.
-        delimiter (str, optional): Character used to separate fields. Defaults to ','.
-        has_header (bool, optional): Indicates whether the first line contains column headers.
-            If ``False`` generic keys ``'col0'``, ``'col1'`` … are used. Defaults to ``True``.
-
-    Returns:
-        List[Dict[str, str]]: A list where each element is a mapping from column name to cell value.
-
-    Raises:
-        TypeError: If ``content`` is not a string.
-        ValueError: If any row has a different number of fields than the header (or the first row when ``has_header`` is ``False``).
-
-    # Dependencies: csv.reader()
-    """"""","import pytest
-from unittest.mock import patch, call
-
-# Adjust the import path to where ``parse_csv`` is defined.
-from module_under_test import parse_csv
-
-
-def _make_fake_reader(expected_delimiter):
-    """"""Factory that creates a fake ``csv.reader`` respecting the given delimiter.""""""
-    def fake_reader(iterable, **kwargs):
-        delimiter = kwargs.get(""delimiter"", "","")
-        # Ensure the delimiter used by the function matches the expectation.
-        assert delimiter == expected_delimiter
-        return (line.split(delimiter) for line in iterable)
-    return fake_reader
-
-
-@pytest.mark.parametrize(
-    ""content,delimiter,has_header,expected"",
-    [
-        # Standard CSV with header.
-        (
-            ""name,age\nAlice,30\nBob,25"",
-            "","",
-            True,
-            [{""name"": ""Alice"", ""age"": ""30""}, {""name"": ""Bob"", ""age"": ""25""}],
-        ),
-        # No header – generic column keys.
-        (
-            ""Alice,30\nBob,25"",
-            "","",
-            False,
-            [{""col0"": ""Alice"", ""col1"": ""30""}, {""col0"": ""Bob"", ""col1"": ""25""}],
-        ),
-        # Custom delimiter ';' with header.
-        (
-            ""id;value\n1;foo\n2;bar"",
-            "";"",
-            True,
-            [{""id"": ""1"", ""value"": ""foo""}, {""id"": ""2"", ""value"": ""bar""}],
-        ),
-    ],
-)
-def test_parse_csv_success(content, delimiter, has_header, expected):
-    """"""
-    Verify correct parsing for various header / delimiter configurations
-    and that ``csv.reader`` is invoked with the expected delimiter.
-    """"""
-    fake_reader = _make_fake_reader(delimiter)
-    with patch(""module_under_test.csv.reader"", side_effect=fake_reader) as reader_mock:
-        result = parse_csv(content, delimiter=delimiter, has_header=has_header)
-
-    assert result == expected
-    # ``csv.reader`` should be called exactly once per invocation.
-    assert reader_mock.call_count == 1
-    # Verify the call received an iterable (the split lines of the content).
-    called_args, called_kwargs = reader_mock.call_args
-    # The first positional argument should be an iterable of the CSV lines.
-    iterable = called_args[0]
-    # Convert iterable to list to compare with expected line split.
-    assert list(iterable) == content.splitlines()
-    # The delimiter keyword argument must match the one passed to ``parse_csv``.
-    assert called_kwargs.get(""delimiter"", "","") == delimiter
-
-
-@pytest.mark.parametrize(
-    ""invalid_content"",
-    [
-        123,                     # integer
-        None,                    # NoneType
-        [""a,b"", ""c,d""],          # list instead of string
-    ],
-)
-def test_parse_csv_type_error(invalid_content):
-    """"""
-    Ensure a ``TypeError`` is raised when ``content`` is not a string.
-    The CSV reader should not be invoked in this case.
-    """"""
-    with patch(""module_under_test.csv.reader"") as reader_mock:
-        with pytest.raises(TypeError):
-            parse_csv(invalid_content)
-    reader_mock.assert_not_called()
-
-
-@pytest.mark.parametrize(
-    ""content,delimiter,has_header"",
-    [
-        # Header present but second row has fewer fields.
-        (""col1,col2\nvalue1"", "","", True),
-        # Header present but second row has extra fields.
-        (""col1,col2\nv1,v2,extra"", "","", True),
-        # No header – first row defines two columns, second row only one.
-        (""a,b\nc"", "","", False),
-    ],
-)
-def test_parse_csv_value_error(content, delimiter, has_header):
-    """"""
-    Verify that a ``ValueError`` is raised when rows contain a different
-    number of fields than the header (or the first row when ``has_header`` is False).
-    """"""
-    fake_reader = _make_fake_reader(delimiter)
-    with patch(""module_under_test.csv.reader"", side_effect=fake_reader):
-        with pytest.raises(ValueError):
-            parse_csv(content, delimiter=delimiter, has_header=has_header)",,
-"def fetch_user_data(user_id: int, api_client: Any) -> dict:
-    """"""
-    Retrieve user profile data from a remote API.
-
-    Args:
-        user_id (int): Identifier of the user to fetch. Must be a positive integer.
-        api_client (Any): HTTP client with a ``get(url: str, timeout: int)`` method returning a response object
-            that has ``status_code`` and ``json()`` attributes.
-
-    Returns:
-        dict: Parsed JSON payload containing the user's profile information.
-
-    Raises:
-        ValueError: If ``user_id`` is not a positive integer.
-        ConnectionError: If the HTTP request fails or returns a non‑200 status code.
-        json.JSONDecodeError: If the response body cannot be decoded as JSON.
-
-    # Dependencies: api_client.get()
-    """"""","import pytest
-from unittest.mock import Mock, call
-import json
-
-# Adjust the import to the actual module where the function is defined
-from module_under_test import fetch_user_data
-
-
-@pytest.fixture
-def api_client_mock():
-    """"""Provide a mock API client with a ``get`` method.""""""
-    client = Mock()
-    client.get = Mock()
-    return client
-
-
-@pytest.mark.parametrize(
-    ""user_id, response_payload"",
-    [
-        (1, {""id"": 1, ""name"": ""Alice""}),
-        (42, {""id"": 42, ""active"": True, ""roles"": []}),
-    ],
-)
-def test_fetch_user_data_success(api_client_mock, user_id, response_payload):
-    """"""
-    Verify that a successful HTTP 200 response returns the parsed JSON payload.
-    """"""
-    # Mock response object
-    response = Mock()
-    response.status_code = 200
-    response.json.return_value = response_payload
-    api_client_mock.get.return_value = response
-
-    result = fetch_user_data(user_id, api_client_mock)
-
-    assert result == response_payload
-    # Ensure ``get`` was called exactly once with a URL containing the user_id
-    assert api_client_mock.get.call_count == 1
-    called_args, called_kwargs = api_client_mock.get.call_args
-    assert isinstance(called_args[0], str) and str(user_id) in called_args[0]
-    assert ""timeout"" in called_kwargs
-
-
-@pytest.mark.parametrize(
-    ""user_id, mock_setup, expected_exception"",
-    [
-        # Invalid user_id (non‑positive) should raise ValueError before any call.
-        (0, None, ValueError),
-        # HTTP error (non‑200 status) should raise ConnectionError.
-        (
-            5,
-            lambda client: client.get.return_value.__setattr__(
-                ""status_code"", 503
-            ) or client.get.return_value.__setattr__(""json"", Mock(return_value={})),
-            ConnectionError,
-        ),
-        # JSON decoding error should raise json.JSONDecodeError.
-        (
-            7,
-            lambda client: client.get.return_value.__setattr__(
-                ""status_code"", 200
-            )
-            or client.get.return_value.json.side_effect = json.JSONDecodeError(
-                ""Expecting value"", doc="""", pos=0
-            ),
-            json.JSONDecodeError,
-        ),
-    ],
-)
-def test_fetch_user_data_exceptions(api_client_mock, user_id, mock_setup, expected_exception):
-    """"""
-    Test that the function raises the documented exceptions for invalid input,
-    HTTP failures, and JSON decoding problems.
-    """"""
-    # Prepare the mock response if a setup callable is provided
-    if mock_setup is not None:
-        # Ensure the response object exists before configuring it
-        response = Mock()
-        api_client_mock.get.return_value = response
-        mock_setup(api_client_mock)
-
-    if expected_exception is ValueError:
-        with pytest.raises(ValueError):
-            fetch_user_data(user_id, api_client_mock)
-        # No HTTP request should be made for invalid user_id
-        api_client_mock.get.assert_not_called()
-    else:
-        with pytest.raises(expected_exception):
-            fetch_user_data(user_id, api_client_mock)
-        # For the other error cases, ``get`` must have been called once
-        api_client_mock.get.assert_called_once()",,
-"def generate_sales_report(start_date: datetime, end_date: datetime, db_connection: Any, *, region: Optional[str] = None, min_sales: float = 0.0, include_trends: bool = False, page_size: int = 100) -> Tuple[List[Dict[str, Any]], Optional[List[Dict[str, Any]]]]:
-    """"""
-    Produce a paginated sales report for a given date range, optionally filtered by region and minimum sales amount,
-    and optionally include sales trend analysis.
-
-    Args:
-        start_date (datetime): Beginning of the reporting period (inclusive).
-        end_date (datetime): End of the reporting period (inclusive). Must be on or after ``start_date``.
-        db_connection (Any): Database connection object exposing a ``fetch_sales(start: datetime, end: datetime, region: Optional[str], min_amount: float, limit: int, offset: int) -> List[Dict]`` method.
-        region (Optional[str], optional): Geographic region to restrict the report to (e.g., ""EMEA"", ""APAC""). If ``None`` all regions are included. Defaults to ``None``.
-        min_sales (float, optional): Minimum total sales value for a record to be included. Must be non‑negative. Defaults to ``0.0``.
-        include_trends (bool, optional): Whether to compute and return sales trend data alongside the main report. Defaults to ``False``.
-        page_size (int, optional): Number of records per page for pagination. Must be a positive integer. Defaults to ``100``.
-
-    Returns:
-        Tuple[List[Dict[str, Any]], Optional[List[Dict[str, Any]]]]:
-            - A list of dictionaries representing the sales rows for the requested page.
-            - If ``include_trends`` is ``True``, a second list containing trend analysis dictionaries; otherwise ``None``.
-
-    Raises:
-        ValueError: If ``end_date`` precedes ``start_date`` or if ``page_size`` is not positive.
-        TypeError: If ``start_date`` or ``end_date`` are not ``datetime`` instances.
-        DatabaseError: If the underlying database query fails.
-        PermissionError: If the caller does not have rights to access sales data for the specified ``region``.
-
-    # Dependencies: db_connection.fetch_sales(start, end, region, min_amount, limit, offset), logger.info(message), compute_trends(sales_data)
-    """"""","import pytest
-from unittest.mock import patch, Mock, call
-from datetime import datetime, timedelta
-from sqlite3 import DatabaseError  # using built‑in DatabaseError for testing
-
-# Adjust the import path to where ``generate_sales_report`` is defined.
-from mymodule import generate_sales_report
-
-
-@pytest.mark.parametrize(
-    ""region,min_sales,include_trends,page_size,fetch_return,trend_return,expected"",
-    [
-        # Simple case, no region filter, no trends.
-        (
-            None,
-            0.0,
-            False,
-            100,
-            [{""id"": 1, ""amount"": 150.0}, {""id"": 2, ""amount"": 200.0}],
-            None,
-            ([
-                {""id"": 1, ""amount"": 150.0},
-                {""id"": 2, ""amount"": 200.0}
-            ], None),
-        ),
-        # Region filter with minimum sales, trends included.
-        (
-            ""EMEA"",
-            100.0,
-            True,
-            50,
-            [{""id"": 3, ""amount"": 120.0}, {""id"": 4, ""amount"": 300.0}],
-            [{""region"": ""EMEA"", ""trend"": ""up""}],
-            ([
-                {""id"": 3, ""amount"": 120.0},
-                {""id"": 4, ""amount"": 300.0}
-            ], [{""region"": ""EMEA"", ""trend"": ""up""}]),
-        ),
-        # Empty result page.
-        (
-            ""APAC"",
-            0.0,
-            False,
-            10,
-            [],
-            None,
-            ([], None),
-        ),
-    ],
-)
-def test_generate_sales_report_success(
-    region,
-    min_sales,
-    include_trends,
-    page_size,
-    fetch_return,
-    trend_return,
-    expected,
-):
-    """"""
-    Verify successful report generation, proper pagination arguments,
-    optional trend calculation, and logger usage.
-    """"""
-    start = datetime(2023, 1, 1)
-    end = datetime(2023, 1, 31)
-
-    db_conn_mock = Mock()
-    db_conn_mock.fetch_sales.return_value = fetch_return
-
-    # Patch external dependencies
-    with patch(""mymodule.logger"") as logger_mock, \
-         patch(""mymodule.compute_trends"") as compute_trends_mock:
-        compute_trends_mock.return_value = trend_return
-
-        result = generate_sales_report(
-            start,
-            end,
-            db_conn_mock,
-            region=region,
-            min_sales=min_sales,
-            include_trends=include_trends,
-            page_size=page_size,
-        )
-
-    # Verify return structure
-    assert result == expected
-
-    # Verify fetch_sales called with correct pagination (offset 0 for first page)
-    db_conn_mock.fetch_sales.assert_called_once_with(
-        start,
-        end,
-        region,
-        min_sales,
-        page_size,
-        0,
-    )
-
-    # Verify logger.info was called at least once
-    assert logger_mock.info.called
-
-    # If trends requested, compute_trends should be called with fetched data
-    if include_trends:
-        compute_trends_mock.assert_called_once_with(fetch_return)
-    else:
-        compute_trends_mock.assert_not_called()
-
-
-@pytest.mark.parametrize(
-    ""start, end, page_size, fetch_side_effect, expected_exception"",
-    [
-        # start_date not a datetime
-        (""2023-01-01"", datetime(2023, 1, 31), 100, None, TypeError),
-        # end_date before start_date
-        (datetime(2023, 2, 1), datetime(2023, 1, 31), 100, None, ValueError),
-        # non‑positive page_size
-        (datetime(2023, 1, 1), datetime(2023, 1, 31), 0, None, ValueError),
-        # database error raised by fetch_sales
-        (datetime(2023, 1, 1), datetime(2023, 1, 31), 100, DatabaseError(""db fail""), DatabaseError),
-        # permission error raised by fetch_sales
-        (datetime(2023, 1, 1), datetime(2023, 1, 31), 100, PermissionError(""no access""), PermissionError),
-    ],
-)
-def test_generate_sales_report_errors(
-    start,
-    end,
-    page_size,
-    fetch_side_effect,
-    expected_exception,
-):
-    """"""
-    Ensure the function raises the documented exceptions for invalid inputs
-    and underlying dependency failures.
-    """"""
-    db_conn_mock = Mock()
-    if fetch_side_effect is not None:
-        db_conn_mock.fetch_sales.side_effect = fetch_side_effect
-    else:
-        db_conn_mock.fetch_sales.return_value = []
-
-    with patch(""mymodule.logger""):
-        with pytest.raises(expected_exception):
-            generate_sales_report(
-                start,
-                end,
-                db_conn_mock,
-                region=None,
-                min_sales=0.0,
-                include_trends=False,
-                page_size=page_size,
-            )
-
-    # When a database‑related exception is expected, ensure fetch_sales was invoked.
-    if fetch_side_effect is not None:
-        db_conn_mock.fetch_sales.assert_called()
-    else:
-        # For input validation errors, fetch_sales should not be called.
-        db_conn_mock.fetch_sales.assert_not_called()",,
-"def upload_document(file_path: str, bucket_client: Any, *, metadata: dict | None = None) -> str:
-    """"""
-    Upload a local file to a cloud storage bucket and return the public URL.
-
-    Args:
-        file_path (str): Path to the file on the local filesystem. Must point to an existing file.
-        bucket_client (Any): Cloud storage client exposing ``upload_file(path: str, dest_key: str, metadata: dict) -> str``.
-            The method returns the URL of the uploaded object.
-        metadata (dict, optional): Optional key‑value pairs to store alongside the object.
-
-    Returns:
-        str: The public URL of the uploaded file as returned by ``bucket_client.upload_file``.
-
-    Raises:
-        FileNotFoundError: If ``file_path`` does not exist or is not readable.
-        TypeError: If ``file_path`` is not a string or ``metadata`` is not a dict when provided.
-        ConnectionError: If ``bucket_client.upload_file`` raises an exception indicating a network failure.
-        UploadError: Custom exception raised by the storage service for permission or quota issues.
-
-    # Dependencies: bucket_client.upload_file()
-    """"""","import pytest
-from unittest.mock import Mock, patch, call
-
-# Adjust the import path to where ``upload_document`` is defined.
-from module_under_test import upload_document
-
-
-# Custom exception matching the documentation.
-class UploadError(Exception):
-    pass
-
-
-@pytest.mark.parametrize(
-    ""file_path,metadata,expected_url"",
-    [
-        # Simple case with metadata provided.
-        (""/tmp/file1.txt"", {""author"": ""alice""}, ""https://bucket.example.com/file1.txt""),
-        # No metadata (default to empty dict).
-        (""/tmp/file2.txt"", None, ""https://bucket.example.com/file2.txt""),
-        # Metadata with multiple keys.
-        (""/tmp/file3.txt"", {""type"": ""pdf"", ""size"": ""2MB""}, ""https://bucket.example.com/file3.txt""),
-    ],
-)
-def test_upload_document_success(file_path, metadata, expected_url):
-    """"""
-    Verify successful upload returns the URL and that ``bucket_client.upload_file``
-    is called with the correct arguments.
-    """"""
-    # Mock ``os.path.isfile`` to pretend the file exists.
-    with patch(""module_under_test.os.path.isfile"", return_value=True):
-        bucket_client = Mock()
-        bucket_client.upload_file.return_value = expected_url
-
-        result = upload_document(file_path, bucket_client, metadata=metadata)
-
-        assert result == expected_url
-        # Ensure ``upload_file`` was called exactly once.
-        assert bucket_client.upload_file.call_count == 1
-        # Inspect positional arguments.
-        args, kwargs = bucket_client.upload_file.call_args
-        # First argument should be the original file path.
-        assert args[0] == file_path
-        # Third positional argument should be metadata (or empty dict if None).
-        expected_meta = metadata if metadata is not None else {}
-        assert args[2] == expected_meta
-        # The destination key is implementation‑specific; we only check it exists.
-        assert isinstance(args[1], str)
-
-
-@pytest.mark.parametrize(
-    ""file_path,metadata,expected_exc,isfile_return"",
-    [
-        # Non‑string file_path.
-        (123, None, TypeError, True),
-        # File does not exist.
-        (""/nonexistent.txt"", None, FileNotFoundError, False),
-        # Invalid metadata type.
-        (""/tmp/file.txt"", [""not"", ""a"", ""dict""], TypeError, True),
-    ],
-)
-def test_upload_document_input_errors(file_path, metadata, expected_exc, isfile_return):
-    """"""
-    Test that invalid inputs raise the documented exceptions and that
-    ``bucket_client.upload_file`` is never invoked.
-    """"""
-    # Patch existence check according to the scenario.
-    with patch(""module_under_test.os.path.isfile"", return_value=isfile_return):
-        bucket_client = Mock()
-        bucket_client.upload_file = Mock()
-
-        with pytest.raises(expected_exc):
-            upload_document(file_path, bucket_client, metadata=metadata)
-
-        bucket_client.upload_file.assert_not_called()
-
-
-@pytest.mark.parametrize(
-    ""side_effect,expected_exc"",
-    [
-        # Network‑level failure.
-        (ConnectionError(""network down""), ConnectionError),
-        # Service‑level upload failure.
-        (UploadError(""quota exceeded""), UploadError),
-    ],
-)
-def test_upload_document_external_errors(side_effect, expected_exc):
-    """"""
-    Ensure that exceptions raised by ``bucket_client.upload_file`` are propagated.
-    """"""
-    file_path = ""/tmp/valid.txt""
-    with patch(""module_under_test.os.path.isfile"", return_value=True):
-        bucket_client = Mock()
-        bucket_client.upload_file.side_effect = side_effect
-
-        with pytest.raises(expected_exc):
-            upload_document(file_path, bucket_client)
-
-        # Verify that ``upload_file`` was attempted once before the exception.
-        bucket_client.upload_file.assert_called_once()
-```",,
-"def send_notification(email: str, subject: str, body: str, smtp_client: Any) -> bool:
-    """"""
-    Send an email notification using the provided SMTP client.
-
-    Args:
-        email (str): Recipient email address. Must contain an ``@`` character.
-        subject (str): Subject line of the email.
-        body (str): Plain‑text body of the email.
-        smtp_client (Any): An object exposing a ``sendmail(from_addr: str, to_addrs: List[str], msg: str)`` method.
-            The ``from_addr`` is fixed to ``'noreply@example.com'``.
-
-    Returns:
-        bool: ``True`` if the email was accepted by the SMTP server, ``False`` otherwise.
-
-    Raises:
-        ValueError: If ``email`` does not appear to be a valid address.
-        ConnectionError: If the SMTP client raises an exception while sending the message.
-
-    # Dependencies: smtp_client.sendmail()
-    """"""","import pytest
-from unittest.mock import Mock, call
-
-from my_module import send_notification
-
-
-@pytest.mark.parametrize(
-    ""email,subject,body,sendmail_return,expected"",
-    [
-        (
-            ""user@example.com"",
-            ""Welcome"",
-            ""Hello there!"",
-            True,
-            True,
-        ),
-        (
-            ""admin@test.org"",
-            """",
-            ""No subject line"",
-            False,
-            False,
-        ),
-        (
-            ""team@company.net"",
-            ""Monthly Report"",
-            ""Please find the attached report."",
-            True,
-            True,
-        ),
-    ],
-)
-def test_send_notification_success(email, subject, body, sendmail_return, expected):
-    smtp_mock = Mock()
-    smtp_mock.sendmail.return_value = sendmail_return
-
-    result = send_notification(email, subject, body, smtp_mock)
-
-    assert result is expected
-    assert smtp_mock.sendmail.call_count == 1
-    from_addr, to_addrs, msg = smtp_mock.sendmail.call_args[0]
-
-    assert from_addr == ""noreply@example.com""
-    assert to_addrs == [email]
-    # Basic sanity checks on the constructed message
-    assert subject in msg
-    assert body in msg
-
-
-@pytest.mark.parametrize(
-    ""invalid_email"",
-    [
-        ""invalid-email"",          # missing '@'
-        ""user@"",                  # missing domain
-        ""@example.com"",           # missing local part
-        """",                       # empty string
-        None,                     # non‑string type
-    ],
-)
-def test_send_notification_invalid_email(invalid_email):
-    smtp_mock = Mock()
+        hash_password(""123"", mock_hasher)
     with pytest.raises(ValueError):
-        send_notification(invalid_email, ""Subj"", ""Body"", smtp_mock)
-    smtp_mock.sendmail.assert_not_called()
-
-
-def test_send_notification_smtp_exception():
-    smtp_mock = Mock()
-    smtp_mock.sendmail.side_effect = ConnectionError(""SMTP failure"")
-
-    with pytest.raises(ConnectionError):
-        send_notification(""user@example.com"", ""Subject"", ""Body"", smtp_mock)
-
-    smtp_mock.sendmail.assert_called_once()
-    from_addr, to_addrs, msg = smtp_mock.sendmail.call_args[0]
-    assert from_addr == ""noreply@example.com""
-    assert to_addrs == [""user@example.com""]
-    assert ""Subject"" in msg
-    assert ""Body"" in msg",,
-"def compute_statistics(data: List[float], *, method: str = ""mean"") -> float:
+        hash_password("""", mock_hasher)",,
+"def calculate_tax(amount: float, tax_rate: float) -> float:
     """"""
-    Calculate a statistical measure for a list of numeric values.
-
+    Calculate tax amount.
+    
     Args:
-        data (List[float]): Sequence of numeric values. Must contain at least one element.
-        method (str, optional): The statistic to compute. Supported values are ``""mean""`` and ``""median""``.
-            Defaults to ``""mean""``.
-
+        amount: Base amount for tax calculation
+        tax_rate: Tax rate as decimal (e.g., 0.15 for 15%)
+    
     Returns:
-        float: The computed statistic as a floating‑point number.
-
+        Calculated tax amount
+    
     Raises:
-        ValueError: If ``data`` is empty.
-        NotImplementedError: If ``method`` is not one of the supported options.
-
-    # Dependencies: numpy.mean(), numpy.median()
+        ValueError: If amount is negative or tax_rate is invalid
     """"""","import pytest
-from unittest.mock import patch, call
 
-# Adjust the import path to where ``compute_statistics`` is defined.
-from module_under_test import compute_statistics
+@pytest.mark.parametrize(""amount,tax_rate,expected"", [
+    (100.0, 0.15, 15.0),
+    (200.0, 0.10, 20.0),
+    (50.0, 0.0, 0.0),
+])
+def test_calculate_tax(amount, tax_rate, expected):
+    assert calculate_tax(amount, tax_rate) == expected
 
+def test_calculate_tax_negative_amount():
+    with pytest.raises(ValueError):
+        calculate_tax(-100.0, 0.15)
 
-@pytest.mark.parametrize(
-    ""data, method, expected"",
-    [
-        # Typical mean calculation.
-        ([1.0, 2.0, 3.0, 4.0], ""mean"", 2.5),
-        # Single element median (edge case).
-        ([42.0], ""median"", 42.0),
-        # Median of an even‑length list.
-        ([10.0, 20.0, 30.0, 40.0], ""median"", 25.0),
-    ],
-)
-def test_compute_statistics_success(data, method, expected):
+def test_calculate_tax_invalid_rate():
+    with pytest.raises(ValueError):
+        calculate_tax(100.0, -0.1)
+    with pytest.raises(ValueError):
+        calculate_tax(100.0, 1.5)",,
+"def create_backup(source_path: str, backup_service, notifier) -> str:
     """"""
-    Verify that ``compute_statistics`` returns the correct value for supported
-    methods and that the appropriate ``numpy`` function is invoked.
-    """"""
-    # Patch both ``numpy.mean`` and ``numpy.median``. Only the relevant one will be
-    # called for a given ``method``.
-    with patch(""module_under_test.numpy.mean"") as mock_mean, patch(
-        ""module_under_test.numpy.median""
-    ) as mock_median:
-        if method == ""mean"":
-            mock_mean.return_value = expected
-        elif method == ""median"":
-            mock_median.return_value = expected
-
-        result = compute_statistics(data, method=method)
-
-    assert isinstance(result, float)
-    assert result == pytest.approx(expected)
-
-    if method == ""mean"":
-        mock_mean.assert_called_once_with(data)
-        mock_median.assert_not_called()
-    else:
-        mock_median.assert_called_once_with(data)
-        mock_mean.assert_not_called()
-
-
-@pytest.mark.parametrize(
-    ""data"",
-    [
-        [],                 # empty list
-        [],                 # another empty case (duplicate to emphasize)
-    ],
-)
-def test_compute_statistics_value_error(data):
-    """"""
-    Ensure a ``ValueError`` is raised when ``data`` is empty.
-    No ``numpy`` functions should be called.
-    """"""
-    with patch(""module_under_test.numpy.mean"") as mock_mean, patch(
-        ""module_under_test.numpy.median""
-    ) as mock_median:
-        with pytest.raises(ValueError):
-            compute_statistics(data)
-
-    mock_mean.assert_not_called()
-    mock_median.assert_not_called()
-
-
-@pytest.mark.parametrize(
-    ""method"",
-    [
-        ""mode"",     # unsupported statistic
-        ""average"",  # another unsupported option
-    ],
-)
-def test_compute_statistics_not_implemented_error(method):
-    """"""
-    Verify that a ``NotImplementedError`` is raised for unsupported ``method`` values.
-    The function should validate the method before invoking any ``numpy`` helpers.
-    """"""
-    data = [1.0, 2.0, 3.0]
-    with patch(""module_under_test.numpy.mean"") as mock_mean, patch(
-        ""module_under_test.numpy.median""
-    ) as mock_median:
-        with pytest.raises(NotImplementedError):
-            compute_statistics(data, method=method)
-
-    mock_mean.assert_not_called()
-    mock_median.assert_not_called()",,
-"def calculate_factorial(n: int, cache: Any = None) -> int:
-    """"""
-    Compute the factorial of a non‑negative integer.
-
+    Create backup of files and notify completion.
+    
     Args:
-        n (int): The integer for which to calculate the factorial. Must be >= 0.
-        cache (Any, optional): An optional cache object exposing a ``get(key)`` and ``set(key, value)`` method.
-            If provided, previously computed factorials may be stored and retrieved using ``n`` as the key.
-            Defaults to ``None`` (no caching).
-
+        source_path: Path to backup
+        backup_service: Backup service instance
+        notifier: Notification service
+    
     Returns:
-        int: The factorial of ``n``.
-
+        Backup ID as string
+    
     Raises:
-        ValueError: If ``n`` is negative.
-        TypeError: If ``n`` is not an integer.
-        RuntimeError: If the cache raises an exception during ``get`` or ``set``.
-
-    # Dependencies: cache.get(), cache.set()
+        FileNotFoundError: If source path doesn't exist
+        RuntimeError: If backup fails
+    
+    # Dependencies: backup_service.create(), notifier.send()
     """"""","import pytest
 from unittest.mock import Mock
 
-# Adjust the import path to where ``calculate_factorial`` is defined.
-from my_module import calculate_factorial
+@pytest.mark.parametrize(""source_path,backup_id"", [
+    (""/data/files"", ""backup-001""),
+    (""/home/user/docs"", ""backup-002""),
+])
+def test_create_backup(source_path, backup_id):
+    mock_backup = Mock()
+    mock_backup.create.return_value = backup_id
+    mock_notifier = Mock()
+    result = create_backup(source_path, mock_backup, mock_notifier)
+    assert result == backup_id
+    mock_backup.create.assert_called_once_with(source_path)
+    mock_notifier.send.assert_called_once_with(f""Backup {backup_id} completed"")
 
+def test_create_backup_path_not_found():
+    mock_backup = Mock()
+    mock_backup.create.side_effect = FileNotFoundError(""Path not found"")
+    mock_notifier = Mock()
+    with pytest.raises(FileNotFoundError):
+        create_backup(""/invalid/path"", mock_backup, mock_notifier)
 
-@pytest.mark.parametrize(
-    ""n, cache_setup, expected, set_expected"",
-    [
-        # No cache provided
-        (0, None, 1, False),
-        # No cache, regular value
-        (5, None, 120, False),
-        # Cache present but miss (get returns None), should compute and set
-        (
-            3,
-            {""get_return"": None},
-            6,
-            True,
-        ),
-        # Cache present and hit (get returns previously stored value)
-        (
-            4,
-            {""get_return"": 24},
-            24,
-            False,
-        ),
-    ],
-)
-def test_calculate_factorial_success(n, cache_setup, expected, set_expected):
-    """"""Verify correct factorial results and proper cache interactions.""""""
-    cache = None
-    if cache_setup is not None:
-        cache = Mock()
-        cache.get.return_value = cache_setup[""get_return""]
-        # ``set`` does nothing special; we just track calls
-        cache.set.return_value = None
-
-    result = calculate_factorial(n, cache=cache)
-
-    assert result == expected
-
-    if cache is not None:
-        cache.get.assert_called_once_with(n)
-        if set_expected:
-            cache.set.assert_called_once_with(n, expected)
-        else:
-            cache.set.assert_not_called()
-
-
-@pytest.mark.parametrize(
-    ""n, expected_exc"",
-    [
-        (-1, ValueError),   # negative integer
-        (3.5, TypeError),   # non‑int numeric
-        (""10"", TypeError),  # wrong type
-    ],
-)
-def test_calculate_factorial_input_errors(n, expected_exc):
-    """"""Input validation should raise the documented exceptions.""""""
-    with pytest.raises(expected_exc):
-        calculate_factorial(n)
-
-
-def test_calculate_factorial_cache_runtime_errors():
-    """"""Cache operations that raise should be propagated as RuntimeError.""""""
-    # Scenario 1: cache.get throws
-    cache_get_err = Mock()
-    cache_get_err.get.side_effect = RuntimeError(""get failure"")
+def test_create_backup_failure():
+    mock_backup = Mock()
+    mock_backup.create.side_effect = RuntimeError(""Backup failed"")
+    mock_notifier = Mock()
     with pytest.raises(RuntimeError):
-        calculate_factorial(2, cache=cache_get_err)
+        create_backup(""/data/files"", mock_backup, mock_notifier)",,
+"def update_inventory(product_id: int, quantity: int, database, audit_logger) -> bool:
+    """"""
+    Update product inventory quantity.
+    
+    Args:
+        product_id: Product identifier
+        quantity: New quantity value
+        database: Database connection
+        audit_logger: Logger for audit trail
+    
+    Returns:
+        True if update successful
+    
+    Raises:
+        ValueError: If product_id or quantity is invalid
+        RuntimeError: If database update fails
+    
+    # Dependencies: database.update(), audit_logger.log()
+    """"""","import pytest
+from unittest.mock import Mock
 
-    # Scenario 2: cache.set throws after a miss
-    cache_set_err = Mock()
-    cache_set_err.get.return_value = None
-    cache_set_err.set.side_effect = RuntimeError(""set failure"")
+@pytest.mark.parametrize(""product_id,quantity"", [
+    (1, 100),
+    (999, 50),
+    (42, 0),
+])
+def test_update_inventory(product_id, quantity):
+    mock_db = Mock()
+    mock_db.update.return_value = True
+    mock_logger = Mock()
+    result = update_inventory(product_id, quantity, mock_db, mock_logger)
+    assert result == True
+    mock_db.update.assert_called_once_with(product_id, quantity)
+    mock_logger.log.assert_called_once()
+
+def test_update_inventory_invalid_inputs():
+    mock_db = Mock()
+    mock_logger = Mock()
+    with pytest.raises(ValueError):
+        update_inventory(-1, 100, mock_db, mock_logger)
+    with pytest.raises(ValueError):
+        update_inventory(1, -10, mock_db, mock_logger)
+
+def test_update_inventory_database_failure():
+    mock_db = Mock()
+    mock_db.update.side_effect = RuntimeError(""Update failed"")
+    mock_logger = Mock()
     with pytest.raises(RuntimeError):
-        calculate_factorial(3, cache=cache_set_err)",,
+        update_inventory(1, 100, mock_db, mock_logger)",,
+"def analyze_sentiment(text: str, analyzer, cache) -> str:
+    """"""
+    Analyze text sentiment with caching.
+    
+    Args:
+        text: Text to analyze
+        analyzer: Sentiment analysis service
+        cache: Cache for storing results
+    
+    Returns:
+        Sentiment classification (positive/negative/neutral)
+    
+    Raises:
+        ValueError: If text is empty
+        RuntimeError: If analysis fails
+    
+    # Dependencies: analyzer.analyze(), cache.get(), cache.set()
+    """"""","import pytest
+from unittest.mock import Mock
+
+@pytest.mark.parametrize(""text,sentiment"", [
+    (""This is great!"", ""positive""),
+    (""This is terrible"", ""negative""),
+    (""This is okay"", ""neutral""),
+])
+def test_analyze_sentiment(text, sentiment):
+    mock_analyzer = Mock()
+    mock_analyzer.analyze.return_value = sentiment
+    mock_cache = Mock()
+    mock_cache.get.return_value = None
+    result = analyze_sentiment(text, mock_analyzer, mock_cache)
+    assert result == sentiment
+    mock_analyzer.analyze.assert_called_once_with(text)
+    mock_cache.set.assert_called_once_with(text, sentiment)
+
+def test_analyze_sentiment_cached():
+    mock_analyzer = Mock()
+    mock_cache = Mock()
+    mock_cache.get.return_value = ""positive""
+    result = analyze_sentiment(""Cached text"", mock_analyzer, mock_cache)
+    assert result == ""positive""
+    mock_analyzer.analyze.assert_not_called()
+
+def test_analyze_sentiment_empty_text():
+    mock_analyzer = Mock()
+    mock_cache = Mock()
+    with pytest.raises(ValueError):
+        analyze_sentiment("""", mock_analyzer, mock_cache)",,
