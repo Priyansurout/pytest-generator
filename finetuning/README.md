@@ -156,7 +156,7 @@ distil model download <model-id>
 The training uses:
 
 - **Base model:** Qwen3-8B-Instruct (student)
-- **Teacher model:** GPT OSS 120B
+- **Teacher model:** Deepseek.v3.1
 - **Task type:** Question-answering
 
 

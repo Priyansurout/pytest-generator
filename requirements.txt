@@ -1,0 +1,7 @@
+
+llama-cpp-python
+huggingface-hub
+pyyaml
+psutil
+pytest
+black
