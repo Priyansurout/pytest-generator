@@ -2,7 +2,7 @@ base:
   task: question-answering
   student_model_name: Qwen3-8B
   teacher_model_name: deepseek.v3.1
-  
+
 tuning:
   learning_rate: 0.00002
   learning_rate_scheduler: cosine
@@ -12,7 +12,7 @@ tuning:
   lora_r: 64
   lora_alpha_multiplier: 2
   num_train_epochs: 4
-  train_eval_split: 0.15
+
 
 evaluation:
   num_few_shot_examples: 3
