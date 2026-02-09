@@ -2,7 +2,7 @@
 Accelerate test coverage by auto-generating test skeletons that developers can refine. Runs locally on your machine.
 
 <p align="center">
-  <img src="logo.png" alt="Pytest Generator" width="500">
+  <img src="logo.png" alt="Pytest Generator" width="450">
 </p>
 
 *Testing boilerplate is tedious. Now you can generate it without sending your code anywhere.*
