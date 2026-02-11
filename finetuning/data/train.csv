@@ -1,4 +1,5 @@
-question,answer,context,"reasoning"
+question,answer
+"
 "def calculate_discount(price: float, discount_percent: float) -> float:
     """"""
     Calculate the final price after applying a discount.
