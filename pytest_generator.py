@@ -32,41 +32,160 @@ class Config:
     DEFAULT_OUTPUT_DIR: str = "./generated_tests/"
     
     # Prompt template
-    PROMPT_TEMPLATE: str = """You are a problem solving model working on task_description XML block:
-<task_description>Generate pytest unit test cases from function signatures and docstrings.
-
+    PROMPT_TEMPLATE: str = """<task>
+You are a problem solving model working
+Generate pytest unit test cases from function signatures and docstrings.
+...
+<examples>
+# Example 1: Simple function WITHOUT dependencies - NO MOCKS
 Input:
-- Function interface with type hints, docstring (Args, Returns, Raises), and optional "# Dependencies: func1(), func2()" declaration
-- Dependencies indicate external services that must be mocked
+def add(a: int, b: int) -> int:
+    \"\"\"Add numbers. Raises: ValueError if negative\"\"\"
 
 Output:
-- Complete pytest test code with imports, parametrized tests (2-3 cases), mocking, edge cases, and error tests
-- Maximum 3 test functions per function (use parametrization for multiple cases)
-- Proper 4-space indentation, no markdown, no headers, no separators
+import pytest
+from module import add
 
-Rules:
-1. Include ALL necessary imports at top: pytest, Mock, AsyncMock, patch, asyncio (if async)
-2. Create Mock() for sync dependencies, AsyncMock() for async dependencies
-3. Set mock return values via mock_service.method.return_value = expected_result
-4. NEVER use Mock(return_value=...) on the object itself when mocking methods
-5. Add assert_called_once_with() for every mock method called
-6. Add assert_not_called() for mocks that should NOT be called on error paths
-7. Use @pytest.mark.asyncio ONLY if function is async def
-8. NEVER use @patch on the function being tested — inject mocks as arguments
-9. Mock method return values MUST match assertion expectations
-10. Use underscores only, never hyphens in variable names
-11. Test ALL exceptions listed in Raises: section
-12. DO NOT include the original function code, docstrings, or any function definitions not starting with "test_"
-13. Define custom exception classes if mentioned in Raises: (class MyError(Exception): pass)</task_description>
+class ValueError(Exception): pass
 
-You will be given a single task in the question XML block.
-Solve only the task in question block.
-Generate only the answer, do not generate anything else.
+@pytest.mark.parametrize("a,b,expected", [(2,3,5), (0,0,0), (-1,1,0)])
+def test_add(a, b, expected):
+    result = add(a, b)
+    assert result == expected
+
+def test_add_negative_error():
+    with pytest.raises(ValueError):
+        add(-5, -3)
+
+---
+
+# Example 2: Function WITH dependencies - USE MOCKS
+Input:
+def save_user(name: str, email: str) -> dict:
+    \"\"\"Save user. Raises: DatabaseError\"\"\"
+    # Dependencies: database.insert(), email_service.send()
+
+Output:
+import pytest
+from unittest.mock import Mock, patch
+from module import save_user
+
+class DatabaseError(Exception): pass
+
+@pytest.mark.asyncio
+@patch('module.email_service')
+@patch('module.database')
+def test_save_user(mock_db, mock_email):
+    mock_db.insert.return_value = {"id": 1, "name": "Alice"}
+    mock_email.send.return_value = True
+    
+    result = save_user("Alice", "alice@test.com")
+    
+    assert result["id"] == 1
+    mock_db.insert.assert_called_once_with("Alice", "alice@test.com")
+    mock_email.send.assert_called_once()
+
+@patch('module.email_service')
+@patch('module.database')
+def test_save_user_db_error(mock_db, mock_email):
+    mock_db.insert.side_effect = DatabaseError("Insert failed")
+    
+    with pytest.raises(DatabaseError):
+        save_user("Alice", "alice@test.com")
+    
+    mock_email.send.assert_not_called()
+
+---
+
+# Example 3: Async function WITHOUT dependencies - NO MOCKS
+Input:
+async def calculate_total(items: list[dict]) -> float:
+    \"\"\"Calculate total price.\"\"\"
+
+Output:
+import pytest
+from module import calculate_total
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("items,expected", [
+    ([{"price": 10}, {"price": 20}], 30.0),
+    ([], 0.0),
+])
+async def test_calculate_total(items, expected):
+    result = await calculate_total(items)
+    assert result == expected
+
+---
+
+# Example 4: Async WITH dependencies - USE MOCKS
+Input:
+async def fetch_user(id: int) -> dict:
+    \"\"\"Fetch user. Raises: NotFoundError\"\"\"
+    # Dependencies: cache.get(), db.query()
+
+Output:
+import pytest
+from unittest.mock import AsyncMock, patch
+from module import fetch_user
+
+class NotFoundError(Exception): pass
+
+@pytest.mark.asyncio
+@patch('module.db')
+@patch('module.cache')
+async def test_fetch_user_from_cache(mock_cache, mock_db):
+    mock_cache.get.return_value = {"id": 1, "name": "Alice"}
+    
+    result = await fetch_user(1)
+    
+    assert result["name"] == "Alice"
+    mock_cache.get.assert_called_once_with(1)
+    mock_db.query.assert_not_called()
+
+@pytest.mark.asyncio
+@patch('module.db')
+@patch('module.cache')
+async def test_fetch_user_cache_miss(mock_cache, mock_db):
+    mock_cache.get.return_value = None
+    mock_db.query.return_value = {"id": 2, "name": "Bob"}
+    
+    result = await fetch_user(2)
+    
+    assert result["name"] == "Bob"
+    mock_cache.get.assert_called_once_with(2)
+    mock_db.query.assert_called_once_with(2)
+
+@pytest.mark.asyncio
+@patch('module.db')
+@patch('module.cache')
+async def test_fetch_user_not_found(mock_cache, mock_db):
+    mock_cache.get.return_value = None
+    mock_db.query.return_value = None
+    
+    with pytest.raises(NotFoundError):
+        await fetch_user(999)
+
+</examples>
+
+<rules>
+CRITICAL - Read carefully:
+1. If function has NO "# Dependencies:" comment → DO NOT use mocks, test logic directly
+2. If function HAS "# Dependencies:" → USE @patch for each dependency listed
+3. NEVER mock the function being tested (e.g., don't @patch('module.add') when testing add)
+4. Import: pytest, Mock/AsyncMock (only if needed), patch (only if needed), function, exceptions
+5. Use @pytest.mark.asyncio for async functions
+6. Use Mock for sync dependencies, AsyncMock for async dependencies
+7. Parametrize tests with 2-3 cases when possible
+8. Test all exceptions listed in Raises section
+9. Module name is 'module' (will be replaced later)
+</rules>
+</task>
 
 <question>
 {code}
 </question>
 """
+
 
     
     @classmethod
@@ -217,7 +336,7 @@ class ModelManager:
     def generate(self, code: str, stream: bool = True) -> Tuple[str, float]:
         """Generate test code for a function."""
         
-        prompt = self.config.PROMPT_TEMPLATE.format(code=code)
+        prompt = self.config.PROMPT_TEMPLATE.replace("{code}", code)
         
         # Format with chat template (pre-fill thinking)
         formatted_prompt = (
