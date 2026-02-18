@@ -520,8 +520,8 @@ class FunctionExtractor(ast.NodeVisitor):
                 'name': node.name,
                 'code': func_code,
                 'is_async': is_async,
-                'line_start': start_line + 1,
-                'line_end': end_line,
+                'line_start': start + 1,
+                'line_end': node.end_lineno,
                 'typed_params': self._extract_typed_params(node),
                 'attr_calls': self._extract_attr_calls(node),
             })
