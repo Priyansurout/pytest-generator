@@ -97,23 +97,23 @@ python pytest_generator.py app.py --no-index
 
 For classes imported from **pip-installed packages** (e.g. `httpx`, `stripe`, `boto3`), the tool imports the module at runtime and uses `inspect.signature()` to get the real method names and argument names.
 
-**Example input:**
+**Example source file:**
 
 ```python
 from httpx import AsyncClient
 
 async def fetch_user(client: AsyncClient, user_id: int) -> dict:
+    """Fetch a user profile from the API."""
     resp = await client.get(f"/users/{user_id}")
     return resp.json()
 ```
 
-**What the model receives (injected automatically):**
+**What the model actually receives** (body stripped, dep comment appended):
 
 ```python
 async def fetch_user(client: AsyncClient, user_id: int) -> dict:
-    resp = await client.get(f"/users/{user_id}")
-    return resp.json()
-    # Dependencies: client.get(url, ...), client.post(url, ...)
+    """Fetch a user profile from the API."""
+    # Dependencies: client.get(url)
 ```
 
 **Generated test:**
