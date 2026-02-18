@@ -472,18 +472,26 @@ class ModelManager:
 # FUNCTION EXTRACTION
 
 class FunctionExtractor(ast.NodeVisitor):
-    """Extract functions from Python source code"""
-    
+    """Extract module-level functions from Python source code (class methods are skipped)."""
+
     def __init__(self, source_code: str):
         self.source_code = source_code
         self.functions = []
-    
-    def visit_FunctionDef(self, node):
-        self._extract_function(node, is_async=False)
+        self._class_depth = 0  # track nesting inside class bodies
+
+    def visit_ClassDef(self, node):
+        self._class_depth += 1
         self.generic_visit(node)
-    
+        self._class_depth -= 1
+
+    def visit_FunctionDef(self, node):
+        if self._class_depth == 0:
+            self._extract_function(node, is_async=False)
+        self.generic_visit(node)
+
     def visit_AsyncFunctionDef(self, node):
-        self._extract_function(node, is_async=True)
+        if self._class_depth == 0:
+            self._extract_function(node, is_async=True)
         self.generic_visit(node)
     
     def _extract_function(self, node, is_async: bool):
