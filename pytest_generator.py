@@ -39,16 +39,29 @@ class Config:
 You are an expert Python test engineer. Generate complete, runnable pytest unit tests from the given function.
 
 <examples>
-# Example 1: Simple function WITHOUT dependencies - test logic directly, NO mocks
+# Example 1: Simple function WITHOUT dependencies — test logic directly, NO mocks
 Input:
 def add(a: int, b: int) -> int:
-    \"\"\"Add two numbers. Raises: ValueError if either argument is negative.\"\"\"
+    \"\"\"Add two integers.
+
+    Args:
+        a: First number
+        b: Second number
+
+    Returns:
+        Sum of a and b
+
+    Raises:
+        ValueError: If either argument is negative
+    \"\"\"
 
 Output:
 import pytest
-from module import add
+import importlib
 
-class ValueError(Exception): pass
+module = importlib.import_module("module")
+add = getattr(module, "add")
+
 
 @pytest.mark.parametrize("a,b,expected", [(2, 3, 5), (0, 0, 0), (100, 1, 101)])
 def test_add(a, b, expected):
@@ -61,51 +74,84 @@ def test_add_negative_raises():
 
 ---
 
-# Example 2: Function WITH dependencies - use @patch for each dependency
+# Example 2: Function WITH dependencies — @pytest.fixture + MagicMock for each dep
 Input:
-def save_user(name: str, email: str) -> dict:
-    \"\"\"Save user to database and send welcome email. Raises: DatabaseError\"\"\"
-    # Dependencies: database.insert(), email_service.send()
+def save_user(name: str, email: str, db, mailer) -> dict:
+    \"\"\"Save user to database and send welcome email.
+
+    Args:
+        name: User display name
+        email: User email address
+        db: Database service
+        mailer: Email service
+
+    Returns:
+        Created user dict with 'id'
+
+    Raises:
+        DatabaseError: If database insert fails
+
+    # Dependencies: db.insert(name, email), mailer.send(to, subject)
+    \"\"\"
 
 Output:
 import pytest
-from unittest.mock import Mock, patch
-from module import save_user
+from unittest.mock import MagicMock
+import importlib
 
-class DatabaseError(Exception): pass
+module = importlib.import_module("module")
+save_user = getattr(module, "save_user")
+DatabaseError = getattr(module, "DatabaseError", Exception)
 
-@patch('module.email_service')
-@patch('module.database')
-def test_save_user_success(mock_db, mock_email):
-    mock_db.insert.return_value = {"id": 1, "name": "Alice"}
-    mock_email.send.return_value = True
 
-    result = save_user("Alice", "alice@test.com")
+@pytest.fixture
+def db():
+    return MagicMock()
+
+@pytest.fixture
+def mailer():
+    return MagicMock()
+
+
+def test_save_user_success(db, mailer):
+    db.insert.return_value = {"id": 1, "name": "Alice"}
+    mailer.send.return_value = True
+
+    result = save_user("Alice", "alice@test.com", db, mailer)
 
     assert result["id"] == 1
-    mock_db.insert.assert_called_once_with("Alice", "alice@test.com")
-    mock_email.send.assert_called_once()
+    db.insert.assert_called_once_with("Alice", "alice@test.com")
+    mailer.send.assert_called_once()
 
-@patch('module.email_service')
-@patch('module.database')
-def test_save_user_db_error(mock_db, mock_email):
-    mock_db.insert.side_effect = DatabaseError("Insert failed")
+def test_save_user_db_error(db, mailer):
+    db.insert.side_effect = DatabaseError("Insert failed")
 
     with pytest.raises(DatabaseError):
-        save_user("Alice", "alice@test.com")
+        save_user("Alice", "alice@test.com", db, mailer)
 
-    mock_email.send.assert_not_called()
+    mailer.send.assert_not_called()
 
 ---
 
-# Example 3: Async function WITHOUT dependencies - NO mocks, use asyncio mark
+# Example 3: Async function WITHOUT dependencies — pytest.mark.asyncio, NO mocks
 Input:
-async def calculate_total(items: list[dict]) -> float:
-    \"\"\"Sum the 'price' field of each item.\"\"\"
+async def calculate_total(items: list) -> float:
+    \"\"\"Sum the 'price' field of each item dict.
+
+    Args:
+        items: List of dicts each containing a 'price' key
+
+    Returns:
+        Total as a float; 0.0 for empty list
+    \"\"\"
 
 Output:
 import pytest
-from module import calculate_total
+import importlib
+
+module = importlib.import_module("module")
+calculate_total = getattr(module, "calculate_total")
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("items,expected", [
@@ -119,66 +165,90 @@ async def test_calculate_total(items, expected):
 
 ---
 
-# Example 4: Async function WITH dependencies - AsyncMock + asyncio mark
+# Example 4: Async function WITH dependencies — AsyncMock for awaited methods, pytest.mark.asyncio
 Input:
-async def fetch_user(id: int) -> dict:
-    \"\"\"Fetch user from cache or DB. Raises: NotFoundError\"\"\"
-    # Dependencies: cache.get(), db.query()
+async def fetch_user(user_id: int, cache, db) -> dict:
+    \"\"\"Fetch user from cache, falling back to DB on miss.
+
+    Args:
+        user_id: ID of the user to fetch
+        cache: Cache service
+        db: Database service
+
+    Returns:
+        User dict
+
+    Raises:
+        NotFoundError: If user not in cache or DB
+
+    # Dependencies: cache.get(key), db.query(id)
+    \"\"\"
 
 Output:
 import pytest
-from unittest.mock import AsyncMock, patch
-from module import fetch_user
+from unittest.mock import MagicMock, AsyncMock
+import importlib
 
-class NotFoundError(Exception): pass
+module = importlib.import_module("module")
+fetch_user = getattr(module, "fetch_user")
+NotFoundError = getattr(module, "NotFoundError", Exception)
+
+
+@pytest.fixture
+def cache():
+    mock = MagicMock()
+    mock.get = AsyncMock()
+    return mock
+
+@pytest.fixture
+def db():
+    mock = MagicMock()
+    mock.query = AsyncMock()
+    return mock
+
 
 @pytest.mark.asyncio
-@patch('module.db')
-@patch('module.cache')
-async def test_fetch_user_from_cache(mock_cache, mock_db):
-    mock_cache.get.return_value = {"id": 1, "name": "Alice"}
+async def test_fetch_user_cache_hit(cache, db):
+    cache.get.return_value = {"id": 1, "name": "Alice"}
 
-    result = await fetch_user(1)
+    result = await fetch_user(1, cache, db)
 
     assert result["name"] == "Alice"
-    mock_cache.get.assert_called_once_with(1)
-    mock_db.query.assert_not_called()
+    cache.get.assert_called_once_with(1)
+    db.query.assert_not_called()
 
 @pytest.mark.asyncio
-@patch('module.db')
-@patch('module.cache')
-async def test_fetch_user_cache_miss(mock_cache, mock_db):
-    mock_cache.get.return_value = None
-    mock_db.query.return_value = {"id": 2, "name": "Bob"}
+async def test_fetch_user_cache_miss(cache, db):
+    cache.get.return_value = None
+    db.query.return_value = {"id": 2, "name": "Bob"}
 
-    result = await fetch_user(2)
+    result = await fetch_user(2, cache, db)
 
     assert result["name"] == "Bob"
-    mock_db.query.assert_called_once_with(2)
+    db.query.assert_called_once_with(2)
 
 @pytest.mark.asyncio
-@patch('module.db')
-@patch('module.cache')
-async def test_fetch_user_not_found(mock_cache, mock_db):
-    mock_cache.get.return_value = None
-    mock_db.query.return_value = None
+async def test_fetch_user_not_found(cache, db):
+    cache.get.return_value = None
+    db.query.return_value = None
 
     with pytest.raises(NotFoundError):
-        await fetch_user(999)
+        await fetch_user(999, cache, db)
 
 </examples>
 
 <rules>
-CRITICAL - follow exactly:
-1. NEVER mock the function being tested itself
-2. If the function has NO "# Dependencies:" comment → test logic directly, NO mocks
-3. If the function HAS "# Dependencies:" → use @patch for every dependency listed — use EXACTLY the method names written there, do NOT invent or rename them
-4. Use Mock for sync dependencies, AsyncMock for async dependencies
-5. Add @pytest.mark.asyncio and "async def" for async functions
-6. Parametrize with 2-3 meaningful cases covering happy path and edge cases
-7. Test every exception listed in the Raises section
-8. Imports: always pytest; Mock/AsyncMock/patch only when used; always import the function; define exception classes locally
-9. Module name placeholder is 'module' (replaced automatically after generation)
+CRITICAL — follow exactly:
+1. IMPORTS: Always `import importlib` at the top, then `module = importlib.import_module("module")` and `func = getattr(module, "func_name")`
+2. EXCEPTIONS: `ErrClass = getattr(module, "ErrClass", Exception)` for every exception in Raises — never define them locally
+3. NO DEPS (no `# Dependencies:`) → test logic directly, no fixtures, no mocks
+4. HAS DEPS (`# Dependencies:` present) → one `@pytest.fixture` per dependency returning `MagicMock()`; pass as test parameters
+5. Use EXACTLY the method names in `# Dependencies:` — never invent or rename them
+6. Async methods (called with `await` inside an `async def`) → set as `AsyncMock()` on the fixture: `mock.method = AsyncMock()`
+7. Async functions → `@pytest.mark.asyncio` and `async def` on every test
+8. Parametrize simple functions with 2-3 meaningful cases covering happy path and edge cases
+9. Test every exception listed in the Raises section
+10. Assert mock calls: `assert_called_once_with(...)` for single calls, `assert_not_called()` to verify skipped paths
 </rules>
 </task>
 
@@ -671,25 +741,40 @@ class TestWriter:
     @staticmethod
     def write(tests: List[Dict], output_path: str, source_file: str):
         """Combine all tests and write to file."""
-        
+
         source_name = Path(source_file).stem
-        
+
         lines = [
             '"""',
             f'Generated tests for {os.path.basename(source_file)}',
             f'Created by pytest-generator',
             '"""',
         ]
-        
+
         for i, test in enumerate(tests, 1):
+            code = TestWriter._replace_module_name(test['code'], source_name)
             lines.append(f"# Test {i}: {test['function_name']}")
-            lines.append(test['code'])
+            lines.append(code)
             lines.append('')
-        
+
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines))
-        
+
         return output_path
+
+    @staticmethod
+    def _replace_module_name(code: str, module_name: str) -> str:
+        """Replace the 'module' placeholder with the real module name in generated code."""
+        # importlib pattern: importlib.import_module("module")
+        code = code.replace('importlib.import_module("module")', f'importlib.import_module("{module_name}")')
+        code = code.replace("importlib.import_module('module')", f"importlib.import_module('{module_name}')")
+        # static import pattern: from module import ... / import module
+        code = code.replace('from module import', f'from {module_name} import')
+        code = re.sub(r'\bimport module\b', f'import {module_name}', code)
+        # @patch strings: @patch('module.X') / @patch("module.X")
+        code = code.replace("@patch('module.", f"@patch('{module_name}.")
+        code = code.replace('@patch("module.', f'@patch("{module_name}.')
+        return code
 
 
 # DEPENDENCY RESOLUTION HELPERS
