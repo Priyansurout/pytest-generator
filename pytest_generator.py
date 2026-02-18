@@ -6,6 +6,8 @@ CPU-Only Version with Config YAML Support
 
 import argparse
 import ast
+import importlib
+import inspect
 import os
 import re
 import sys
@@ -13,7 +15,8 @@ import time
 import psutil
 import gc
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
+import json
 from dataclasses import dataclass
 
 # DEFAULT CONFIGURATION
@@ -33,14 +36,13 @@ class Config:
     
     # Prompt template
     PROMPT_TEMPLATE: str = """<task>
-You are a problem solving model working
-Generate pytest unit test cases from function signatures and docstrings.
-...
+You are an expert Python test engineer. Generate complete, runnable pytest unit tests from the given function.
+
 <examples>
-# Example 1: Simple function WITHOUT dependencies - NO MOCKS
+# Example 1: Simple function WITHOUT dependencies - test logic directly, NO mocks
 Input:
 def add(a: int, b: int) -> int:
-    \"\"\"Add numbers. Raises: ValueError if negative\"\"\"
+    \"\"\"Add two numbers. Raises: ValueError if either argument is negative.\"\"\"
 
 Output:
 import pytest
@@ -48,21 +50,21 @@ from module import add
 
 class ValueError(Exception): pass
 
-@pytest.mark.parametrize("a,b,expected", [(2,3,5), (0,0,0), (-1,1,0)])
+@pytest.mark.parametrize("a,b,expected", [(2, 3, 5), (0, 0, 0), (100, 1, 101)])
 def test_add(a, b, expected):
     result = add(a, b)
     assert result == expected
 
-def test_add_negative_error():
+def test_add_negative_raises():
     with pytest.raises(ValueError):
-        add(-5, -3)
+        add(-1, 5)
 
 ---
 
-# Example 2: Function WITH dependencies - USE MOCKS
+# Example 2: Function WITH dependencies - use @patch for each dependency
 Input:
 def save_user(name: str, email: str) -> dict:
-    \"\"\"Save user. Raises: DatabaseError\"\"\"
+    \"\"\"Save user to database and send welcome email. Raises: DatabaseError\"\"\"
     # Dependencies: database.insert(), email_service.send()
 
 Output:
@@ -72,15 +74,14 @@ from module import save_user
 
 class DatabaseError(Exception): pass
 
-@pytest.mark.asyncio
 @patch('module.email_service')
 @patch('module.database')
-def test_save_user(mock_db, mock_email):
+def test_save_user_success(mock_db, mock_email):
     mock_db.insert.return_value = {"id": 1, "name": "Alice"}
     mock_email.send.return_value = True
-    
+
     result = save_user("Alice", "alice@test.com")
-    
+
     assert result["id"] == 1
     mock_db.insert.assert_called_once_with("Alice", "alice@test.com")
     mock_email.send.assert_called_once()
@@ -89,18 +90,18 @@ def test_save_user(mock_db, mock_email):
 @patch('module.database')
 def test_save_user_db_error(mock_db, mock_email):
     mock_db.insert.side_effect = DatabaseError("Insert failed")
-    
+
     with pytest.raises(DatabaseError):
         save_user("Alice", "alice@test.com")
-    
+
     mock_email.send.assert_not_called()
 
 ---
 
-# Example 3: Async function WITHOUT dependencies - NO MOCKS
+# Example 3: Async function WITHOUT dependencies - NO mocks, use asyncio mark
 Input:
 async def calculate_total(items: list[dict]) -> float:
-    \"\"\"Calculate total price.\"\"\"
+    \"\"\"Sum the 'price' field of each item.\"\"\"
 
 Output:
 import pytest
@@ -110,6 +111,7 @@ from module import calculate_total
 @pytest.mark.parametrize("items,expected", [
     ([{"price": 10}, {"price": 20}], 30.0),
     ([], 0.0),
+    ([{"price": 5.5}], 5.5),
 ])
 async def test_calculate_total(items, expected):
     result = await calculate_total(items)
@@ -117,10 +119,10 @@ async def test_calculate_total(items, expected):
 
 ---
 
-# Example 4: Async WITH dependencies - USE MOCKS
+# Example 4: Async function WITH dependencies - AsyncMock + asyncio mark
 Input:
 async def fetch_user(id: int) -> dict:
-    \"\"\"Fetch user. Raises: NotFoundError\"\"\"
+    \"\"\"Fetch user from cache or DB. Raises: NotFoundError\"\"\"
     # Dependencies: cache.get(), db.query()
 
 Output:
@@ -135,9 +137,9 @@ class NotFoundError(Exception): pass
 @patch('module.cache')
 async def test_fetch_user_from_cache(mock_cache, mock_db):
     mock_cache.get.return_value = {"id": 1, "name": "Alice"}
-    
+
     result = await fetch_user(1)
-    
+
     assert result["name"] == "Alice"
     mock_cache.get.assert_called_once_with(1)
     mock_db.query.assert_not_called()
@@ -148,11 +150,10 @@ async def test_fetch_user_from_cache(mock_cache, mock_db):
 async def test_fetch_user_cache_miss(mock_cache, mock_db):
     mock_cache.get.return_value = None
     mock_db.query.return_value = {"id": 2, "name": "Bob"}
-    
+
     result = await fetch_user(2)
-    
+
     assert result["name"] == "Bob"
-    mock_cache.get.assert_called_once_with(2)
     mock_db.query.assert_called_once_with(2)
 
 @pytest.mark.asyncio
@@ -161,23 +162,23 @@ async def test_fetch_user_cache_miss(mock_cache, mock_db):
 async def test_fetch_user_not_found(mock_cache, mock_db):
     mock_cache.get.return_value = None
     mock_db.query.return_value = None
-    
+
     with pytest.raises(NotFoundError):
         await fetch_user(999)
 
 </examples>
 
 <rules>
-CRITICAL - Read carefully:
-1. If function has NO "# Dependencies:" comment → DO NOT use mocks, test logic directly
-2. If function HAS "# Dependencies:" → USE @patch for each dependency listed
-3. NEVER mock the function being tested (e.g., don't @patch('module.add') when testing add)
-4. Import: pytest, Mock/AsyncMock (only if needed), patch (only if needed), function, exceptions
-5. Use @pytest.mark.asyncio for async functions
-6. Use Mock for sync dependencies, AsyncMock for async dependencies
-7. Parametrize tests with 2-3 cases when possible
-8. Test all exceptions listed in Raises section
-9. Module name is 'module' (will be replaced later)
+CRITICAL - follow exactly:
+1. NEVER mock the function being tested itself
+2. If the function has NO "# Dependencies:" comment → test logic directly, NO mocks
+3. If the function HAS "# Dependencies:" → use @patch for every dependency listed — use EXACTLY the method names written there, do NOT invent or rename them
+4. Use Mock for sync dependencies, AsyncMock for async dependencies
+5. Add @pytest.mark.asyncio and "async def" for async functions
+6. Parametrize with 2-3 meaningful cases covering happy path and edge cases
+7. Test every exception listed in the Raises section
+8. Imports: always pytest; Mock/AsyncMock/patch only when used; always import the function; define exception classes locally
+9. Module name placeholder is 'module' (replaced automatically after generation)
 </rules>
 </task>
 
@@ -333,10 +334,11 @@ class ModelManager:
         
         return self
     
-    def generate(self, code: str, stream: bool = True) -> Tuple[str, float]:
+    def generate(self, code: str, stream: bool = True, dependencies: str = "") -> Tuple[str, float]:
         """Generate test code for a function."""
-        
-        prompt = self.config.PROMPT_TEMPLATE.replace("{code}", code)
+
+        effective_code = (code + "\n" + dependencies) if dependencies else code
+        prompt = self.config.PROMPT_TEMPLATE.replace("{code}", effective_code)
         
         # Format with chat template (pre-fill thinking)
         formatted_prompt = (
@@ -428,9 +430,215 @@ class FunctionExtractor(ast.NodeVisitor):
                 'is_async': is_async,
                 'line_start': start_line + 1,
                 'line_end': end_line,
+                'typed_params': self._extract_typed_params(node),
+                'attr_calls': self._extract_attr_calls(node),
             })
         except Exception as e:
             print(f"{Colors.WARNING}⚠️  Could not extract {node.name}: {e}{Colors.ENDC}")
+
+    @staticmethod
+    def _extract_typed_params(node) -> Dict[str, str]:
+        """Return {param_name: class_name} for non-builtin type-annotated args."""
+        _BUILTINS = {
+            'str', 'int', 'float', 'bool', 'list', 'dict', 'set', 'tuple',
+            'None', 'Optional', 'List', 'Dict', 'Any', 'Union', 'Tuple',
+            'Sequence', 'Iterable', 'object',
+        }
+        result: Dict[str, str] = {}
+        for arg in node.args.args:
+            if arg.arg in ('self', 'cls'):
+                continue
+            if arg.annotation is None:
+                continue
+            try:
+                type_str = ast.unparse(arg.annotation)
+            except Exception:
+                continue
+            # Strip Optional[X] -> X
+            if type_str.startswith('Optional[') and type_str.endswith(']'):
+                type_str = type_str[len('Optional['):-1]
+            if type_str.isidentifier() and type_str not in _BUILTINS:
+                result[arg.arg] = type_str
+        return result
+
+    @staticmethod
+    def _extract_attr_calls(node) -> Dict[str, List[str]]:
+        """Return {param_name: [method_names]} from obj.method(...) calls in body."""
+        param_names = {
+            arg.arg for arg in node.args.args
+            if arg.arg not in ('self', 'cls')
+        }
+        calls: Dict[str, List[str]] = {}
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call):
+                continue
+            func = child.func
+            if not isinstance(func, ast.Attribute):
+                continue
+            if not isinstance(func.value, ast.Name):
+                continue
+            obj_name = func.value.id
+            if obj_name not in param_names:
+                continue
+            method_name = func.attr
+            if obj_name not in calls:
+                calls[obj_name] = []
+            if method_name not in calls[obj_name]:
+                calls[obj_name].append(method_name)
+        return calls
+
+
+# IMPORT EXTRACTION AND RUNTIME INSPECTION
+
+class ImportExtractor(ast.NodeVisitor):
+    """Parse a source file's import statements and build {ClassName: module_path} map."""
+
+    def __init__(self):
+        self.import_map: Dict[str, str] = {}  # {name: "module.path"}
+
+    def visit_ImportFrom(self, node):
+        # from module import Class [as alias]  →  {"Class": "module"}
+        module = node.module or ""
+        for alias in node.names:
+            name = alias.asname or alias.name
+            self.import_map[name] = module
+        self.generic_visit(node)
+
+    def visit_Import(self, node):
+        # import module [as alias]  →  {"alias": "module"}
+        for alias in node.names:
+            name = alias.asname or alias.name
+            self.import_map[name] = alias.name
+        self.generic_visit(node)
+
+    @classmethod
+    def from_source(cls, source: str) -> Dict[str, str]:
+        try:
+            tree = ast.parse(source)
+            extractor = cls()
+            extractor.visit(tree)
+            return extractor.import_map
+        except SyntaxError:
+            return {}
+
+
+class RuntimeInspector:
+    """Use importlib + inspect to get real method signatures from any importable class."""
+
+    @staticmethod
+    def get_class_methods(class_name: str, module_path: str) -> List[Dict]:
+        """
+        Import module_path at runtime and return public methods of class_name
+        as [{name, args, is_async}]. Returns [] on any failure (missing deps,
+        import side effects, class not found, etc.).
+        """
+        try:
+            module = importlib.import_module(module_path)
+            cls = getattr(module, class_name, None)
+            if cls is None or not inspect.isclass(cls):
+                return []
+            methods = []
+            for name, method in inspect.getmembers(cls, predicate=inspect.isfunction):
+                if name.startswith('_'):
+                    continue
+                try:
+                    sig = inspect.signature(method)
+                    args = [p for p in sig.parameters if p != 'self']
+                except (ValueError, TypeError):
+                    args = []
+                methods.append({
+                    'name': name,
+                    'args': args,
+                    'is_async': inspect.iscoroutinefunction(method),
+                })
+            return methods
+        except Exception:
+            return []
+
+
+# CODEBASE INDEXING
+
+class CodebaseIndexer:
+    """Scan a project directory and build a class/method index for dependency resolution."""
+
+    def __init__(self, scan_root: str):
+        self.scan_root = Path(scan_root).resolve()
+        self.index: Dict[str, Any] = {}
+
+    def build(self) -> 'CodebaseIndexer':
+        """Scan files and build the index. Returns self for chaining."""
+        files = self._collect_files()
+        print(f"{Colors.CYAN}🔍 Indexing {len(files)} file(s) from {self.scan_root}{Colors.ENDC}")
+        for path in files:
+            self._index_file(path)
+        class_count = len(self.index)
+        print(f"{Colors.GREEN}✅ Indexed {class_count} class(es){Colors.ENDC}\n")
+        return self
+
+    def _collect_files(self) -> List[Path]:
+        _SKIP = ('test_', '__pycache__', 'venv', '.venv', '.git')
+        result = []
+        for p in self.scan_root.rglob('*.py'):
+            rel = str(p)
+            if any(skip in rel for skip in _SKIP):
+                continue
+            result.append(p)
+        return result
+
+    def _index_file(self, path: Path):
+        try:
+            source = path.read_text(encoding='utf-8')
+            tree = ast.parse(source)
+        except Exception:
+            return
+        rel_path = str(path.relative_to(self.scan_root))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            methods = []
+            for item in node.body:
+                if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                # Skip dunder methods other than __init__
+                if item.name.startswith('__') and item.name.endswith('__') and item.name != '__init__':
+                    continue
+                args = [a.arg for a in item.args.args if a.arg != 'self']
+                returns = ''
+                if item.returns is not None:
+                    try:
+                        returns = ast.unparse(item.returns)
+                    except Exception:
+                        returns = ''
+                methods.append({
+                    'name': item.name,
+                    'args': args,
+                    'returns': returns,
+                    'is_async': isinstance(item, ast.AsyncFunctionDef),
+                })
+            self.index[node.name] = {
+                'file': rel_path,
+                'methods': methods,
+            }
+
+    def save(self, json_path: str):
+        """Dump the index to a JSON file."""
+        data = {
+            'scan_root': str(self.scan_root),
+            'classes': self.index,
+        }
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+        print(f"{Colors.GREEN}✅ Index saved to: {json_path}{Colors.ENDC}")
+
+    @classmethod
+    def load(cls, json_path: str) -> 'CodebaseIndexer':
+        """Load a previously saved index JSON."""
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        instance = cls(data.get('scan_root', '.'))
+        instance.index = data.get('classes', {})
+        print(f"{Colors.GREEN}✅ Loaded index: {len(instance.index)} class(es) from {json_path}{Colors.ENDC}\n")
+        return instance
 
 
 # TEST FILE WRITER
@@ -462,9 +670,107 @@ class TestWriter:
         return output_path
 
 
+# DEPENDENCY RESOLUTION HELPERS
+
+def find_project_root(start_path: str) -> str:
+    """Walk up from start_path looking for project root markers."""
+    _MARKERS = ('pyproject.toml', 'setup.py', 'setup.cfg', '.git', 'requirements.txt')
+    current = Path(start_path).resolve()
+    if current.is_file():
+        current = current.parent
+    for _ in range(6):
+        for marker in _MARKERS:
+            if (current / marker).exists():
+                return str(current)
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    # Fallback to the directory of start_path
+    p = Path(start_path).resolve()
+    return str(p.parent if p.is_file() else p)
+
+
+def resolve_dependencies(func_info: Dict, index: Dict, import_map: Dict[str, str] = None) -> Dict[str, Any]:
+    """
+    Given a function's typed_params and attr_calls, resolve each param's class methods.
+
+    Resolution order:
+    1. RuntimeInspector — import the module and use inspect.signature() (covers pip packages)
+    2. CodebaseIndexer  — fall back to the pre-built AST index (local project files)
+    """
+    typed_params: Dict[str, str] = func_info.get('typed_params', {})
+    attr_calls: Dict[str, List[str]] = func_info.get('attr_calls', {})
+    deps: Dict[str, Any] = {}
+    for param_name, class_name in typed_params.items():
+        methods = []
+        source = None
+
+        # 1. Try runtime inspection (handles pip-installed packages too)
+        if import_map and class_name in import_map:
+            module_path = import_map[class_name]
+            runtime_methods = RuntimeInspector.get_class_methods(class_name, module_path)
+            if runtime_methods:
+                methods = runtime_methods
+                source = "runtime"
+
+        # 2. Fall back to AST-based codebase index (local project scan)
+        if not methods and index and class_name in index:
+            entry = index[class_name]
+            methods = entry['methods']
+            source = "index"
+
+        if methods:
+            deps[param_name] = {
+                'class_name': class_name,
+                'methods': methods,
+                'called_methods': attr_calls.get(param_name, []),
+                'source': source,
+            }
+    return deps
+
+
+def format_dependency_block(deps: Dict[str, Any]) -> str:
+    """Return a '# Dependencies: ...' comment line compatible with the fine-tuned model.
+
+    When method signatures come from RuntimeInspector, argument names are included
+    (e.g. 'db.get_order(order_id)').  Index-sourced methods keep the no-args format
+    to preserve parity with the training data.
+    """
+    if not deps:
+        return ""
+    parts = []
+    for param_name, info in deps.items():
+        source = info.get('source', 'index')
+
+        # Build name→args lookup for runtime-sourced methods
+        args_map: Dict[str, List[str]] = {}
+        if source == "runtime":
+            for m in info['methods']:
+                args_map[m['name']] = m.get('args', [])
+
+        # Prefer methods actually called in the body; fall back to all public methods
+        methods_to_list = info['called_methods'] if info['called_methods'] else [
+            m['name'] for m in info['methods']
+            if not (m['name'].startswith('__') and m['name'].endswith('__') and m['name'] != '__init__')
+        ]
+
+        for method in methods_to_list:
+            if source == "runtime" and method in args_map:
+                arg_str = ", ".join(args_map[method])
+                parts.append(f"{param_name}.{method}({arg_str})")
+            else:
+                parts.append(f"{param_name}.{method}()")
+
+    if not parts:
+        return ""
+    return "    # Dependencies: " + ", ".join(parts)
+
+
 # MAIN PROCESSING
 
-def process_file(file_path: str, model_manager: ModelManager, output_dir: str, config: Config) -> Optional[str]:
+def process_file(file_path: str, model_manager: ModelManager, output_dir: str, config: Config,
+                 index=None, stream: bool = True) -> Optional[str]:
     """Process a single Python file."""
     
     print(f"\n{Colors.CYAN}{Colors.BOLD}📄 Processing: {file_path}{Colors.ENDC}\n")
@@ -477,7 +783,7 @@ def process_file(file_path: str, model_manager: ModelManager, output_dir: str, c
         print(f"{Colors.FAIL}❌ Failed to read {file_path}: {e}{Colors.ENDC}")
         return None
     
-    # Extract functions
+    # Extract functions and imports
     try:
         tree = ast.parse(source_code)
         extractor = FunctionExtractor(source_code)
@@ -485,7 +791,8 @@ def process_file(file_path: str, model_manager: ModelManager, output_dir: str, c
     except SyntaxError as e:
         print(f"{Colors.FAIL}❌ Syntax error: {e}{Colors.ENDC}")
         return None
-    
+
+    import_map = ImportExtractor.from_source(source_code)
     functions = extractor.functions
     
     if not functions:
@@ -507,7 +814,14 @@ def process_file(file_path: str, model_manager: ModelManager, output_dir: str, c
     for i, func in enumerate(functions, 1):
         print(f"{Colors.BLUE}[{i}/{len(functions)}] {func['name']}(){Colors.ENDC}")
         
-        test_code, elapsed = model_manager.generate(func['code'], stream=True)
+        dep_block = ""
+        if index is not None:
+            deps = resolve_dependencies(func, index, import_map=import_map)
+            if deps:
+                dep_block = format_dependency_block(deps)
+                print(f"{Colors.CYAN}  ↳ Deps: {', '.join(deps)}{Colors.ENDC}")
+
+        test_code, elapsed = model_manager.generate(func['code'], stream=stream, dependencies=dep_block)
         total_time += elapsed
         
         generated_tests.append({
@@ -530,7 +844,8 @@ def process_file(file_path: str, model_manager: ModelManager, output_dir: str, c
     return output_path
 
 
-def process_directory(dir_path: str, model_manager: ModelManager, output_dir: str, config: Config):
+def process_directory(dir_path: str, model_manager: ModelManager, output_dir: str, config: Config,
+                      index=None, stream: bool = True):
     """Process all Python files in directory."""
     
     py_files = list(Path(dir_path).rglob("*.py"))
@@ -556,7 +871,7 @@ def process_directory(dir_path: str, model_manager: ModelManager, output_dir: st
         print(f"File {i}/{len(py_files)}")
         print(f"{'='*60}{Colors.ENDC}")
         
-        result = process_file(str(py_file), model_manager, output_dir, config)
+        result = process_file(str(py_file), model_manager, output_dir, config, index=index, stream=stream)
         if result:
             success_count += 1
         
@@ -622,7 +937,34 @@ Custom Config YAML:
         action='store_true',
         help='Disable streaming output'
     )
-    
+
+    parser.add_argument(
+        '--scan-root',
+        metavar='DIR',
+        default=None,
+        help='Root directory to scan for codebase index (default: auto-detect from target)'
+    )
+
+    parser.add_argument(
+        '--save-index',
+        metavar='FILE',
+        default=None,
+        help='Save class index JSON to this path after scanning'
+    )
+
+    parser.add_argument(
+        '--load-index',
+        metavar='FILE',
+        default=None,
+        help='Load previously saved index, skip re-scanning'
+    )
+
+    parser.add_argument(
+        '--no-index',
+        action='store_true',
+        help='Disable dependency resolution entirely'
+    )
+
     args = parser.parse_args()
     
     # Load configuration
@@ -681,10 +1023,24 @@ Custom Config YAML:
     start_time = time.time()
     
     try:
+        # Build or load codebase index
+        codebase_index = None
+        if not args.no_index:
+            if args.load_index:
+                codebase_index = CodebaseIndexer.load(args.load_index).index
+            else:
+                scan_root = args.scan_root or find_project_root(args.target)
+                indexer = CodebaseIndexer(scan_root).build()
+                codebase_index = indexer.index
+                if args.save_index:
+                    indexer.save(args.save_index)
+
         if target_path.is_file():
-            process_file(str(target_path), model_manager, config.DEFAULT_OUTPUT_DIR, config)
+            process_file(str(target_path), model_manager, config.DEFAULT_OUTPUT_DIR, config,
+                         index=codebase_index, stream=not args.no_stream)
         elif target_path.is_dir():
-            process_directory(str(target_path), model_manager, config.DEFAULT_OUTPUT_DIR, config)
+            process_directory(str(target_path), model_manager, config.DEFAULT_OUTPUT_DIR, config,
+                              index=codebase_index, stream=not args.no_stream)
         else:
             print(f"{Colors.FAIL}❌ Invalid target: {args.target}{Colors.ENDC}")
             sys.exit(1)

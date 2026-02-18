@@ -20,7 +20,7 @@ Your code never leaves your machine.
 | Qwen3-8B Q4 (quantized) | 8B | ~65% | N/A | |
 | Qwen3-8B (base) | 8B | 15% | 36% | |
 
-The tuned **Qwen3-8B** model nears the **671B** teacher’s performance while being over **80×** smaller, with major gains over the base model. The Q4 variant preserves most accuracy and enables efficient local execution, making it ideal for private, on-device test generation.
+The tuned **Qwen3-8B** model nears the **671B** teacher's performance while being over **80×** smaller, with major gains over the base model. The Q4 variant preserves most accuracy and enables efficient local execution, making it ideal for private, on-device test generation.
 
 ## Quick Start
 
@@ -35,7 +35,7 @@ pip install -r requirements.txt
 ```
 ### 3. Download the Model
 
-**Auto-download**  
+**Auto-download**
 The model is automatically downloaded on first run (~5GB).
 
 **Manual download**
@@ -68,6 +68,88 @@ python pytest_generator.py ./src/ -o ./tests/
 python pytest_generator.py app.py myconfig.yaml
 ```
 ---
+
+## Dependency-Aware Mock Generation
+
+One of the hardest parts of writing tests for real-world code is knowing **exactly what methods to mock**. Without this, LLMs hallucinate method names that don't exist and generate tests that fail immediately.
+
+pytest-generator solves this in two stages:
+
+### Stage 1 — Local project scan (AST)
+
+On startup, the tool scans your project directory with Python's `ast` module and builds an index of every class and its methods. This works for any `.py` file in your project.
+
+```bash
+# Scan a specific directory (default: project root)
+python pytest_generator.py app.py --scan-root ./src/
+
+# Save the index for reuse (skip re-scanning on next run)
+python pytest_generator.py app.py --save-index /tmp/index.json
+
+# Load a previously saved index
+python pytest_generator.py app.py --load-index /tmp/index.json
+
+# Disable dependency resolution entirely (fastest, pre-v2 behaviour)
+python pytest_generator.py app.py --no-index
+```
+
+### Stage 2 — Runtime inspection (importlib + inspect)
+
+For classes imported from **pip-installed packages** (e.g. `httpx`, `stripe`, `boto3`), the tool imports the module at runtime and uses `inspect.signature()` to get the real method names and argument names.
+
+**Example input:**
+
+```python
+from httpx import AsyncClient
+
+async def fetch_user(client: AsyncClient, user_id: int) -> dict:
+    resp = await client.get(f"/users/{user_id}")
+    return resp.json()
+```
+
+**What the model receives (injected automatically):**
+
+```python
+async def fetch_user(client: AsyncClient, user_id: int) -> dict:
+    resp = await client.get(f"/users/{user_id}")
+    return resp.json()
+    # Dependencies: client.get(url, ...), client.post(url, ...)
+```
+
+**Generated test:**
+
+```python
+import pytest
+from unittest.mock import AsyncMock, patch
+
+@pytest.mark.asyncio
+@patch("httpx.AsyncClient")
+async def test_fetch_user(mock_client):
+    mock_client.get = AsyncMock(return_value=AsyncMock(json=lambda: {"id": 1, "name": "Alice"}))
+    result = await fetch_user(mock_client, 1)
+    assert result == {"id": 1, "name": "Alice"}
+    mock_client.get.assert_called_once_with("/users/1")
+```
+
+The model uses the **real method names and argument signatures** — no hallucination.
+
+### Resolution priority
+
+| Source | Covers | Arg names |
+|--------|--------|-----------|
+| Runtime inspection (`importlib + inspect`) | pip packages + installed local packages | Yes — full signatures |
+| AST codebase index | Local `.py` files in your project | Method names only |
+| None | Unresolvable classes | No dep block injected |
+
+### Known limitations
+
+- **Import side effects:** If a module runs code on import (opens a DB connection, loads config, parses CLI args), the import will fail silently and that dependency is skipped. The tool continues and generates tests without a mock hint for that class.
+- **Relative imports:** `from .module import MyClass` only resolves if the package is properly installed in the current environment.
+- **Missing packages:** If a pip package is not installed, runtime inspection silently falls back to the AST index (or skips deps if the class isn't found there either).
+- **Dynamically generated methods:** Methods added via `__getattr__` or metaclasses at runtime won't appear in the dependency block.
+
+---
+
 ## Configuration
 
 pytest-generator can be customized using a YAML configuration file. All settings are optional — sensible defaults are provided for local test generation.
@@ -76,22 +158,22 @@ pytest-generator can be customized using a YAML configuration file. All settings
 
 Controls which local GGUF model is used.
 
-- **`model.repo`** – Hugging Face repository containing the model  
+- **`model.repo`** – Hugging Face repository containing the model
   *(default: `Priyansu19/pytest-8b-GGUF`)*
-- **`model.file`** – Specific model file to load  
-  - `pytest-8b-q4_k_m.gguf` – fast, ~5GB, recommended  
-  - `pytest-8b-f16.gguf` – higher quality, ~16GB, slower  
+- **`model.file`** – Specific model file to load
+  - `pytest-8b-q4_k_m.gguf` – fast, ~5GB, recommended
+  - `pytest-8b-f16.gguf` – higher quality, ~16GB, slower
 
 ### Generation Parameters
 
 Controls how tests are generated.
 
-- **`generation.n_ctx`** – Context window size (larger functions need more)  
-- **`generation.max_tokens`** – Maximum tokens per generated test file  
-- **`generation.temperature`** – Randomness (keep low for deterministic tests)  
-- **`generation.top_p`** – Nucleus sampling threshold  
-- **`generation.repeat_penalty`** – Reduces repetitive output  
-- **`generation.batch_size`** – Higher is faster but uses more RAM  
+- **`generation.n_ctx`** – Context window size (larger functions need more)
+- **`generation.max_tokens`** – Maximum tokens per generated test file
+- **`generation.temperature`** – Randomness (keep low for deterministic tests)
+- **`generation.top_p`** – Nucleus sampling threshold
+- **`generation.repeat_penalty`** – Reduces repetitive output
+- **`generation.batch_size`** – Higher is faster but uses more RAM
 
 Recommended defaults are tuned for consistent and reliable pytest output.
 
@@ -99,15 +181,15 @@ Recommended defaults are tuned for consistent and reliable pytest output.
 
 Controls CPU usage.
 
-- **`hardware.n_threads`** – Number of CPU threads  
-  - `-1` auto-detects and leaves cores free for the system  
-  - Set a fixed value to limit CPU usage  
+- **`hardware.n_threads`** – Number of CPU threads
+  - `-1` auto-detects and leaves cores free for the system
+  - Set a fixed value to limit CPU usage
 
 ### Output Settings
 
 Controls where generated tests are written.
 
-- **`output.default_dir`** – Default directory for generated test files  
+- **`output.default_dir`** – Default directory for generated test files
   (can be overridden with the `-o` CLI flag)
 
 
@@ -123,12 +205,12 @@ pytest-generator analyzes your Python files, extracts functions, and generates s
 ### Single File Test Generation
 
 ```bash
-python testgen.py calculator.py
+python pytest_generator.py calculator.py
 ```
 Example output (truncated):
 
 ```bash
-📄 Processing: calc.py
+📄 Processing: calculator.py
 ✅ Found 7 function(s)
 
 [1/7] add()
@@ -158,9 +240,9 @@ Existing AI-based solutions usually rely on cloud APIs, require sending source c
 
 We wanted a solution that:
 
-- **Runs locally** – no API calls, works fully offline, and keeps code private  
-- **Is practical on developer machines** – runs on CPU with a single GGUF model  
-- **Produces usable tests** – structured pytest skeletons that developers can easily refine  
+- **Runs locally** – no API calls, works fully offline, and keeps code private
+- **Is practical on developer machines** – runs on CPU with a single GGUF model
+- **Produces usable tests** – structured pytest skeletons that developers can easily refine
 - **Scales down well** – works with quantized models without large quality loss
 
 To achieve this, we fine-tuned a compact **Qwen3-8B** model specifically for generating pytest test cases from Python function signatures and docstrings. The model is optimized for deterministic output and consistent test structure rather than creative text generation.
@@ -182,21 +264,21 @@ This confirmed that while the task is clearly learnable, it is **not** reliably 
 
 We evaluated a large teacher model (Deepseek v3.1, 671B) using structured prompts and reference test patterns.
 
-The teacher achieved strong performance across both LLM-as-a-Judge and exact match metrics. This established a clear target:  
+The teacher achieved strong performance across both LLM-as-a-Judge and exact match metrics. This established a clear target:
 **could a much smaller model match this quality while running fully locally?**
 
 ### Training Pipeline
 
-**Seed Data**  
+**Seed Data**
 We manually created ~25 high-quality examples covering common Python function patterns, edge cases, error handling, async functions, and realistic docstrings.
 
-**Synthetic Expansion**  
+**Synthetic Expansion**
 Using a large teacher model, we expanded the dataset to ~10,000 training examples via knowledge distillation, ensuring consistent pytest structure and coverage patterns.
 
-**Fine-tuning**  
+**Fine-tuning**
 We fine-tuned the Qwen3-8B model using LoRA for 4 epochs, optimizing for deterministic and structured test generation.
 
-**Quantization**  
+**Quantization**
 The fine-tuned model was converted to Q4_K_M format, enabling efficient CPU-only local inference with minimal quality loss.
 
 ## Qualitative Example
@@ -298,13 +380,13 @@ distil model download <model-id>
 ```
 
 ---
-## FAQ ❓
+## FAQ
 
 ### Q: Why not just use GPT-4 or Claude for this?
 
-Because your code shouldn’t leave your machine.
+Because your code shouldn't leave your machine.
 
-pytest-generator runs locally, works offline, and keeps everything private.  
+pytest-generator runs locally, works offline, and keeps everything private.
 No API keys, no rate limits, no usage costs, no data leakage.
 
 ---
@@ -320,6 +402,20 @@ Out of the box, it produces:
 - Poor coverage of documented exceptions
 
 Fine-tuning is required to reliably generate **structured, runnable pytest code**.
+
+---
+
+### Q: The mocks use wrong method names. What's happening?
+
+This usually means dependency resolution couldn't find the class.
+
+Check that:
+1. The parameter has a type annotation (e.g. `db: DatabaseClient`, not just `db`)
+2. The class is imported at the top of the file
+3. If it's a pip package, it's installed in your current Python environment (`pip show <package>`)
+4. If it's a local class, it's in a `.py` file that `--scan-root` covers
+
+Use `--save-index /tmp/index.json` and inspect the JSON to see which classes were found.
 
 ---
 
@@ -340,7 +436,7 @@ If `config.yaml` is missing, pytest-generator runs with sensible defaults.
 
 No.
 
-The model is downloaded once from HuggingFace and cached locally.  
+The model is downloaded once from HuggingFace and cached locally.
 All parsing, inference, and test generation happen on your machine.
 
 Your source code never leaves your computer.
@@ -351,8 +447,8 @@ Your source code never leaves your computer.
 
 Two one-time costs:
 
-- **Model download:** ~5GB GGUF file  
-- **Model loading:** Loading weights into RAM  
+- **Model download:** ~5GB GGUF file
+- **Model loading:** Loading weights into RAM
 
 After that, runs are fast since the model is cached locally.
 
@@ -360,16 +456,16 @@ After that, runs are fast since the model is cached locally.
 
 ### Q: Can I use pytest-generator offline?
 
-Yes — that’s the point.
+Yes — that's the point.
 
-- **100% offline** after initial download  
-- **Privacy-first** — no data ever leaves your device  
-- **Fast** — local inference on CPU  
-- **Free** — no API costs or rate limits  
+- **100% offline** after initial download
+- **Privacy-first** — no data ever leaves your device
+- **Fast** — local inference on CPU
+- **Free** — no API costs or rate limits
 
 ---
 
-### Q: The generated tests aren’t perfect. Is that expected?
+### Q: The generated tests aren't perfect. Is that expected?
 
 Yes. pytest-generator produces **test skeletons**, not final production tests.
 
@@ -378,7 +474,7 @@ The goal is to:
 - Reflect docstring intent
 - Generate runnable pytest code
 
-You’re expected to review and refine the output — but starting from a strong baseline instead of a blank file.
+You're expected to review and refine the output — but starting from a strong baseline instead of a blank file.
 
 If you see consistent issues, please open an issue with an example.
 
@@ -400,21 +496,3 @@ Yes! Visit [distillabs.ai](https://www.distillabs.ai/) to discuss custom solutio
 ---
 
 *Built with [Distil Labs](https://distillabs.ai) - turn a prompt and a few examples into production-ready small language models.*
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

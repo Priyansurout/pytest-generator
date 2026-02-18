@@ -20,3 +20,12 @@ env/
 *.swp
 *.swo
 .DS_Store
+
+# Model cache (auto-downloaded on first run, ~5GB)
+.cache/
+
+# Generated test output from examples — not source-controlled
+examples/generated_tests/
+
+# Claude Code local settings
+.claude/settings.local.json
