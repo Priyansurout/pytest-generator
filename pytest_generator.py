@@ -417,12 +417,34 @@ class FunctionExtractor(ast.NodeVisitor):
         self.generic_visit(node)
     
     def _extract_function(self, node, is_async: bool):
-        """Extract function info from AST node."""
+        """Extract function info: signature + docstring only (no implementation body).
+
+        The fine-tuned model was trained on signature+docstring inputs — sending the
+        full body would be out-of-distribution and degrade generation quality.
+        _extract_attr_calls still walks the full AST node to detect method calls.
+        """
         try:
-            start_line = node.lineno - 1
-            end_line = node.end_lineno
-            source_lines = self.source_code.splitlines()[start_line:end_line]
-            func_code = '\n'.join(source_lines)
+            source_lines = self.source_code.splitlines()
+            start = node.lineno - 1  # 0-indexed
+
+            # Decide where to stop:
+            #   - has docstring  → include through the closing """ line
+            #   - no docstring   → include only the def signature lines (up to first body stmt)
+            has_docstring = (
+                node.body
+                and isinstance(node.body[0], ast.Expr)
+                and isinstance(node.body[0].value, ast.Constant)
+                and isinstance(node.body[0].value.value, str)
+            )
+            if has_docstring:
+                # end_lineno is 1-indexed inclusive → works as 0-indexed exclusive slice end
+                end = node.body[0].end_lineno
+            else:
+                # body[0].lineno - 1 excludes the first body statement.
+                # max() guards single-line functions where body starts on the def line.
+                end = max(node.body[0].lineno - 1, node.lineno) if node.body else node.lineno
+
+            func_code = '\n'.join(source_lines[start:end])
             
             self.functions.append({
                 'name': node.name,

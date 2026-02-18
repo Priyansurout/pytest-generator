@@ -283,7 +283,9 @@ The fine-tuned model was converted to Q4_K_M format, enabling efficient CPU-only
 
 ## Qualitative Example
 
-### Input Function
+The tool extracts only the **function signature + docstring** from your source file and sends that to the model — the implementation body is intentionally stripped. The model was fine-tuned on this format, so sending the full body would be out-of-distribution.
+
+### What the model sees
 
 ```python
 def add(a: Union[int, float], b: Union[int, float]) -> Union[int, float]:
@@ -299,10 +301,8 @@ def add(a: Union[int, float], b: Union[int, float]) -> Union[int, float]:
     Raises:
         TypeError: If inputs are not numbers
     """
-    if not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
-        raise TypeError("Inputs must be numbers")
-    return a + b
 ```
+
 ### Generated Tests
 ```python
 import pytest

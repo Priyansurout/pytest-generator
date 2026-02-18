@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-CLI tool that generates pytest unit tests from Python source files using a local, CPU-only LLM. Code never leaves the machine. Takes Python files/directories as input, extracts function signatures via AST parsing, and produces test files via a fine-tuned 8B model.
+CLI tool that generates pytest unit tests from Python source files using a local, CPU-only LLM. Code never leaves the machine. Takes Python files/directories as input, extracts function signatures + docstrings via AST parsing (implementation body is intentionally stripped — the model was fine-tuned on signature+docstring inputs), and produces test files via a fine-tuned 8B model.
 
 ## Tech Stack
 
@@ -81,7 +81,7 @@ distil model download <model-id>
 | `Config` | :21 | Dataclass holding all settings; `from_yaml()` at :192 |
 | `HardwareDetector` | :243 | Auto-detects CPU threads (all cores − 2) |
 | `ModelManager` | :271 | Downloads and loads GGUF model; runs inference |
-| `FunctionExtractor` | :405 | AST visitor — extracts signatures, typed params, attr calls |
+| `FunctionExtractor` | :405 | AST visitor — extracts signature+docstring (no body), typed params, attr calls |
 | `CodebaseIndexer` | :494 | Scans project `.py` files; builds class/method index |
 | `TestWriter` | :579 | Assembles and writes `test_*.py` output files |
 | `Colors` | :230 | ANSI terminal color constants |
