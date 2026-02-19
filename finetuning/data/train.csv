@@ -1,936 +1,4315 @@
-question,answer
-"
-"def calculate_discount(price: float, discount_percent: float) -> float:
-    """"""
-    Calculate the final price after applying a discount.
-    
+"question","answer"
+"def calculate_discount(
+    price: float,
+    coupon: Optional[str],
+    coupon_service,
+    logger=None,
+) -> float:
+    """"""Calculates the discounted price given an optional coupon.
+
     Args:
-        price: Original price of the item
-        discount_percent: Discount percentage (0-100)
-    
+        price (float): Original price of the product. Must be non‑negative.
+        coupon (Optional[str]): Coupon code to apply. If ``None``, no discount is applied.
+        coupon_service: Service with ``validate(code: str) -> bool`` and ``discount_percent(code: str) -> float``.
+            ``validate`` raises ``InvalidCouponError`` for malformed codes.
+        logger (optional): Logger with ``debug`` and ``warning`` methods.
+
     Returns:
-        Final price after discount
-    
+        float: The final price after applying the discount. Never less than zero.
+
     Raises:
-        ValueError: If price is negative or discount_percent is not in range 0-100
-    """"""","import pytest
+        ValueError: If ``price`` is negative.
+        InvalidCouponError: If ``coupon`` is provided but fails validation.
+        CouponServiceError: Propagated if ``coupon_service`` encounters an unexpected failure.
 
-def test_calculate_discount():
-    assert calculate_discount(100.0, 10.0) == 90.0
-    assert calculate_discount(50.0, 20.0) == 40.0
-    assert calculate_discount(200.0, 0.0) == 200.0
-
-def test_calculate_discount_edge_cases():
-    assert calculate_discount(100.0, 100.0) == 0.0
-    assert calculate_discount(0.0, 50.0) == 0.0
-
-def test_calculate_discount_raises_value_error():
-    with pytest.raises(ValueError):
-        calculate_discount(-10.0, 10.0)
-    with pytest.raises(ValueError):
-        calculate_discount(100.0, -5.0)
-    with pytest.raises(ValueError):
-        calculate_discount(100.0, 150.0)",,
-"def fetch_user_data(user_id: int, api_client) -> dict:
+    Dependencies:
+        - coupon_service (synchronous): Validates coupons and provides discount percentages.
+        - logger (optional): Used for tracing discount calculations.
     """"""
-    Fetch user data from an external API.
-    
-    Args:
-        user_id: The ID of the user to fetch
-        api_client: API client instance
-    
-    Returns:
-        Dictionary containing user data
-    
-    Raises:
-        ConnectionError: If API is unreachable
-        ValueError: If user_id is invalid
-    
-    # Dependencies: api_client.get()
-    """"""","import pytest
-from unittest.mock import Mock
+    ...","import pytest
+from unittest.mock import MagicMock, ANY
+import importlib
 
-@pytest.mark.parametrize(""user_id,expected_data"", [
-    (1, {""id"": 1, ""name"": ""Alice""}),
-    (2, {""id"": 2, ""name"": ""Bob""}),
-    (999, {""id"": 999, ""name"": ""Test User""}),
-])
-def test_fetch_user_data(user_id, expected_data):
-    mock_api = Mock()
-    mock_api.get.return_value = expected_data
-    result = fetch_user_data(user_id, mock_api)
-    assert result == expected_data
-    mock_api.get.assert_called_once_with(f""/users/{user_id}"")
+module = importlib.import_module(""discount"")
+calculate_discount = getattr(module, ""calculate_discount"")
+InvalidCouponError = getattr(module, ""InvalidCouponError"", Exception)
+CouponServiceError = getattr(module, ""CouponServiceError"", Exception)
 
-def test_fetch_user_data_connection_error():
-    mock_api = Mock()
-    mock_api.get.side_effect = ConnectionError(""API unreachable"")
-    with pytest.raises(ConnectionError):
-        fetch_user_data(1, mock_api)
 
-def test_fetch_user_data_invalid_id():
-    mock_api = Mock()
+@pytest.fixture
+def coupon_service():
+    return MagicMock()
+
+
+@pytest.fixture
+def logger():
+    return MagicMock()
+
+
+def test_calculate_discount_no_coupon(coupon_service, logger):
+    price = 123.45
+    result = calculate_discount(price, None, coupon_service, logger=logger)
+    assert result == pytest.approx(price)
+    logger.debug.assert_called()
+
+
+def test_calculate_discount_valid_coupon(coupon_service, logger):
+    price = 200.0
+    coupon = ""SAVE10""
+    coupon_service.validate.return_value = True
+    coupon_service.discount_percent.return_value = 0.10
+
+    result = calculate_discount(price, coupon, coupon_service, logger=logger)
+
+    assert result == pytest.approx(180.0)
+    coupon_service.validate.assert_called_once_with(coupon)
+    coupon_service.discount_percent.assert_called_once_with(coupon)
+    logger.debug.assert_called()
+
+
+def test_calculate_discount_invalid_coupon_raises(coupon_service, logger):
+    price = 50.0
+    coupon = ""BADCODE""
+    coupon_service.validate.side_effect = InvalidCouponError(""invalid"")
+
+    with pytest.raises(InvalidCouponError):
+        calculate_discount(price, coupon, coupon_service, logger=logger)
+
+    coupon_service.validate.assert_called_once_with(coupon)
+    logger.warning.assert_called()
+
+
+def test_calculate_discount_negative_price_raises(coupon_service, logger):
     with pytest.raises(ValueError):
-        fetch_user_data(-1, mock_api)",,
-"def process_payment(amount: float, payment_gateway, send_receipt) -> str:
-    """"""
-    Process a payment and send receipt.
-    
+        calculate_discount(-10.0, None, coupon_service, logger=logger)
+
+
+def test_calculate_discount_coupon_service_error_propagates(coupon_service, logger):
+    price = 80.0
+    coupon = ""ERR""
+    coupon_service.validate.return_value = True
+    coupon_service.discount_percent.side_effect = CouponServiceError(""service fail"")
+
+    with pytest.raises(CouponServiceError):
+        calculate_discount(price, coupon, coupon_service, logger=logger)
+
+    coupon_service.validate.assert_called_once_with(coupon)
+    coupon_service.discount_percent.assert_called_once_with(coupon)
+
+
+def test_calculate_discount_discount_not_negative(coupon_service, logger):
+    price = 30.0
+    coupon = ""BIGDISC""
+    coupon_service.validate.return_value = True
+    coupon_service.discount_percent.return_value = 1.5  # 150% discount
+
+    result = calculate_discount(price, coupon, coupon_service, logger=logger)
+
+    assert result == pytest.approx(0.0)
+    coupon_service.validate.assert_called_once_with(coupon)
+    coupon_service.discount_percent.assert_called_once_with(coupon)"
+"async def fetch_user_profile(
+    user_id: int,
+    api_client,
+    cache=None,
+) -> dict:
+    """"""Retrieves a user's profile information from a remote API, optionally using a cache.
+
     Args:
-        amount: Payment amount in dollars
-        payment_gateway: Payment processing service
-        send_receipt: Function to send receipt email
-    
+        user_id: Identifier of the user whose profile is requested.
+        api_client: Async client exposing ``get(path: str, params: dict) -> Awaitable[dict]``.
+            Expected to raise ``APIError`` on request failures.
+        cache (optional): Mapping object with ``get(key: str) -> Any`` and ``set(key: str, value: Any) -> None`` for caching responses.
+
     Returns:
-        Transaction ID as string
-    
+        A dictionary containing the user's profile data as returned by the API.
+
     Raises:
-        ValueError: If amount is negative or zero
-        RuntimeError: If payment processing fails
-    
-    # Dependencies: payment_gateway.charge(), send_receipt()
-    """"""","import pytest
-from unittest.mock import Mock
+        ValueError: If ``user_id`` is not a positive integer.
+        APIError: Propagated if the remote API request fails.
+        CacheError: Propagated if ``cache`` operations raise an exception.
 
-@pytest.mark.parametrize(""amount,expected_tx_id"", [
-    (50.0, ""TX-001""),
-    (100.5, ""TX-002""),
-    (999.99, ""TX-003""),
-])
-def test_process_payment(amount, expected_tx_id):
-    mock_gateway = Mock()
-    mock_gateway.charge.return_value = expected_tx_id
-    mock_send = Mock()
-    result = process_payment(amount, mock_gateway, mock_send)
-    assert result == expected_tx_id
-    mock_gateway.charge.assert_called_once_with(amount)
-    mock_send.assert_called_once_with(expected_tx_id, amount)
+    Dependencies:
+        - api_client: Provides async ``get`` method for HTTP requests.
+        - cache (optional): Simple key/value store for caching profile data.
+    """"""
+    ...","import pytest
+from unittest.mock import AsyncMock, MagicMock, ANY
 
-def test_process_payment_invalid_amount():
-    mock_gateway = Mock()
-    mock_send = Mock()
+import importlib
+
+module = importlib.import_module(""user_profile"")
+fetch_user_profile = getattr(module, ""fetch_user_profile"")
+APIError = getattr(module, ""APIError"", Exception)
+CacheError = getattr(module, ""CacheError"", Exception)
+
+
+@pytest.fixture
+def mock_api_client():
+    client = MagicMock()
+    client.get = AsyncMock()
+    return client
+
+
+@pytest.fixture
+def mock_cache():
+    cache = MagicMock()
+    cache.get = MagicMock()
+    cache.set = MagicMock()
+    return cache
+
+
+@pytest.mark.asyncio
+async def test_fetch_user_profile_cache_hit(mock_api_client, mock_cache):
+    user_id = 42
+    cached_profile = {""id"": user_id, ""name"": ""Alice""}
+    mock_cache.get.return_value = cached_profile
+
+    profile = await fetch_user_profile(user_id, mock_api_client, cache=mock_cache)
+
+    assert profile == cached_profile
+    mock_cache.get.assert_called_once_with(ANY)
+    mock_api_client.get.assert_not_called()
+    mock_cache.set.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fetch_user_profile_cache_miss_success(mock_api_client, mock_cache):
+    user_id = 7
+    api_response = {""id"": user_id, ""name"": ""Bob""}
+    mock_cache.get.return_value = None
+    mock_api_client.get.return_value = api_response
+
+    profile = await fetch_user_profile(user_id, mock_api_client, cache=mock_cache)
+
+    assert profile == api_response
+    mock_cache.get.assert_called_once_with(ANY)
+    mock_api_client.get.assert_awaited_once_with(ANY, {""user_id"": user_id})
+    mock_cache.set.assert_called_once_with(ANY, api_response)
+
+
+@pytest.mark.asyncio
+async def test_fetch_user_profile_invalid_user_id(mock_api_client, mock_cache):
     with pytest.raises(ValueError):
-        process_payment(0.0, mock_gateway, mock_send)
+        await fetch_user_profile(0, mock_api_client, cache=mock_cache)
     with pytest.raises(ValueError):
-        process_payment(-10.0, mock_gateway, mock_send)
+        await fetch_user_profile(-5, mock_api_client, cache=mock_cache)
 
-def test_process_payment_gateway_failure():
-    mock_gateway = Mock()
-    mock_gateway.charge.side_effect = RuntimeError(""Payment failed"")
-    mock_send = Mock()
-    with pytest.raises(RuntimeError):
-        process_payment(100.0, mock_gateway, mock_send)",,
-"def validate_email(email: str) -> bool:
-    """"""
-    Validate email address format.
-    
+
+@pytest.mark.asyncio
+async def test_fetch_user_profile_api_error_propagates(mock_api_client, mock_cache):
+    user_id = 3
+    mock_cache.get.return_value = None
+    mock_api_client.get.side_effect = APIError(""network failure"")
+
+    with pytest.raises(APIError):
+        await fetch_user_profile(user_id, mock_api_client, cache=mock_cache)
+
+    mock_cache.get.assert_called_once_with(ANY)
+    mock_api_client.get.assert_awaited_once_with(ANY, {""user_id"": user_id})
+    mock_cache.set.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fetch_user_profile_cache_get_error_propagates(mock_api_client, mock_cache):
+    user_id = 8
+    mock_cache.get.side_effect = CacheError(""cache read failure"")
+
+    with pytest.raises(CacheError):
+        await fetch_user_profile(user_id, mock_api_client, cache=mock_cache)
+
+    mock_cache.get.assert_called_once_with(ANY)
+    mock_api_client.get.assert_not_called()
+    mock_cache.set.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fetch_user_profile_cache_set_error_propagates(mock_api_client, mock_cache):
+    user_id = 9
+    api_response = {""id"": user_id, ""name"": ""Charlie""}
+    mock_cache.get.return_value = None
+    mock_api_client.get.return_value = api_response
+    mock_cache.set.side_effect = CacheError(""cache write failure"")
+
+    with pytest.raises(CacheError):
+        await fetch_user_profile(user_id, mock_api_client, cache=mock_cache)
+
+    mock_cache.get.assert_called_once_with(ANY)
+    mock_api_client.get.assert_awaited_once_with(ANY, {""user_id"": user_id})
+    mock_cache.set.assert_called_once_with(ANY, api_response)"
+"def import_and_validate_csv(
+    file_path: str,
+    fs,
+    validator,
+    *,
+    delimiter: str = "","",
+    has_header: bool = True,
+    logger=None,
+) -> list[dict]:
+    """"""Reads a CSV file from a virtual file system, validates each row, and returns the valid records.
+
     Args:
-        email: Email address string to validate
-    
+        file_path (str): Path to the CSV file within the provided ``fs`` abstraction.
+        fs: File‑system abstraction exposing ``open(path, mode)`` that returns a file‑like object supporting iteration.
+        validator: Callable that accepts a ``dict`` representing a row and returns ``True`` if the row is valid,
+            otherwise raises ``ValueError`` with a descriptive message.
+        delimiter (str, optional): Character used to separate columns. Defaults to ``,``.
+        has_header (bool, optional): Indicates whether the first line contains column headers. If ``True``, the first row is used as keys.
+        logger (optional): Logger with ``debug`` and ``warning`` methods for reporting parsing issues.
+
     Returns:
-        True if valid, False otherwise
-    
+        list[dict]: A list of dictionaries for rows that passed validation. Keys correspond to column names.
+
     Raises:
-        TypeError: If email is not a string
-    """"""","import pytest
+        FileNotFoundError: If ``fs.open`` cannot locate ``file_path``.
+        csv.Error: If parsing fails due to malformed CSV structure.
+        ValueError: Propagated from ``validator`` when a row is invalid; the function skips invalid rows but logs a warning.
+        IOError: Propagated if reading from the file object fails.
 
-@pytest.mark.parametrize(""email,expected"", [
-    (""user@example.com"", True),
-    (""test.user@domain.co.uk"", True),
-    (""invalid.email"", False),
-    (""@example.com"", False),
-    (""user@"", False),
-])
-def test_validate_email(email, expected):
-    assert validate_email(email) == expected
-
-def test_validate_email_edge_cases():
-    assert validate_email("""") == False
-    assert validate_email(""a@b.c"") == True
-
-def test_validate_email_type_error():
-    with pytest.raises(TypeError):
-        validate_email(123)
-    with pytest.raises(TypeError):
-        validate_email(None)",,
-"def merge_configs(base_config: dict, override_config: dict, validator) -> dict:
+    Dependencies:
+        - fs: Provides ``open`` method; may raise ``FileNotFoundError``.
+        - validator: Callable used to validate each row; may raise ``ValueError``.
+        - logger (optional): Used to log debug information and validation warnings.
+        - csv (standard library): Used for CSV parsing.
     """"""
-    Merge two configuration dictionaries with validation.
-    
-    Args:
-        base_config: Base configuration dictionary
-        override_config: Configuration values to override
-        validator: Function to validate merged config
-    
-    Returns:
-        Merged and validated configuration dictionary
-    
-    Raises:
-        ValueError: If validation fails
-        TypeError: If inputs are not dictionaries
-    
-    # Dependencies: validator()
-    """"""","import pytest
-from unittest.mock import Mock
+    ...","import pytest
+from unittest.mock import MagicMock, call
+import importlib
+import csv
+import io
 
-@pytest.mark.parametrize(""base,override,expected"", [
-    ({""a"": 1}, {""b"": 2}, {""a"": 1, ""b"": 2}),
-    ({""x"": 10}, {""x"": 20}, {""x"": 20}),
-    ({}, {""key"": ""value""}, {""key"": ""value""}),
-])
-def test_merge_configs(base, override, expected):
-    mock_validator = Mock(return_value=True)
-    result = merge_configs(base, override, mock_validator)
-    assert result == expected
-    mock_validator.assert_called_once_with(expected)
+module = importlib.import_module(""target_module"")
+import_and_validate_csv = getattr(module, ""import_and_validate_csv"")
 
-def test_merge_configs_validation_failure():
-    mock_validator = Mock(return_value=False)
-    with pytest.raises(ValueError):
-        merge_configs({""a"": 1}, {""b"": 2}, mock_validator)
 
-def test_merge_configs_type_error():
-    mock_validator = Mock()
-    with pytest.raises(TypeError):
-        merge_configs(""not_dict"", {}, mock_validator)
-    with pytest.raises(TypeError):
-        merge_configs({}, ""not_dict"", mock_validator)",,
-"def calculate_average(numbers: list[float]) -> float:
-    """"""
-    Calculate the average of a list of numbers.
-    
-    Args:
-        numbers: List of numeric values
-    
-    Returns:
-        Average value as float
-    
-    Raises:
-        ValueError: If list is empty
-        TypeError: If list contains non-numeric values
-    """"""","import pytest
+@pytest.fixture
+def mock_fs():
+    return MagicMock()
 
-@pytest.mark.parametrize(""numbers,expected"", [
-    ([1.0, 2.0, 3.0], 2.0),
-    ([10.0, 20.0], 15.0),
-    ([5.5], 5.5),
-])
-def test_calculate_average(numbers, expected):
-    assert calculate_average(numbers) == expected
 
-def test_calculate_average_empty_list():
-    with pytest.raises(ValueError):
-        calculate_average([])
+@pytest.fixture
+def mock_validator():
+    return MagicMock()
 
-def test_calculate_average_type_error():
-    with pytest.raises(TypeError):
-        calculate_average([1, 2, ""three""])
-    with pytest.raises(TypeError):
-        calculate_average([1, None, 3])",,
-"def retry_operation(operation, max_retries: int, logger) -> any:
-    """"""
-    Retry an operation with exponential backoff.
-    
-    Args:
-        operation: Callable to execute
-        max_retries: Maximum number of retry attempts
-        logger: Logger instance for recording attempts
-    
-    Returns:
-        Result from successful operation execution
-    
-    Raises:
-        RuntimeError: If all retries are exhausted
-        ValueError: If max_retries is less than 1
-    
-    # Dependencies: operation(), logger.info(), logger.error()
-    """"""","import pytest
-from unittest.mock import Mock
 
-@pytest.mark.parametrize(""max_retries,expected_result"", [
-    (3, ""success""),
-    (1, ""success""),
-    (5, ""success""),
-])
-def test_retry_operation_success(max_retries, expected_result):
-    mock_op = Mock(return_value=expected_result)
-    mock_logger = Mock()
-    result = retry_operation(mock_op, max_retries, mock_logger)
-    assert result == expected_result
-    mock_op.assert_called_once()
-    assert mock_logger.info.called
+@pytest.fixture
+def mock_logger():
+    return MagicMock()
 
-def test_retry_operation_exhausted_retries():
-    mock_op = Mock(side_effect=Exception(""Failed""))
-    mock_logger = Mock()
-    with pytest.raises(RuntimeError):
-        retry_operation(mock_op, 3, mock_logger)
-    assert mock_op.call_count == 3
-    assert mock_logger.error.called
 
-def test_retry_operation_invalid_max_retries():
-    mock_op = Mock()
-    mock_logger = Mock()
-    with pytest.raises(ValueError):
-        retry_operation(mock_op, 0, mock_logger)",,
-"def parse_json_file(filepath: str, file_reader) -> dict:
-    """"""
-    Parse JSON from a file.
-    
-    Args:
-        filepath: Path to JSON file
-        file_reader: Function to read file contents
-    
-    Returns:
-        Parsed JSON as dictionary
-    
-    Raises:
-        FileNotFoundError: If file doesn't exist
-        ValueError: If JSON is invalid
-    
-    # Dependencies: file_reader()
-    """"""","import pytest
-from unittest.mock import Mock
+def _make_file_mock(content: str):
+    file_obj = MagicMock()
+    file_obj.__enter__.return_value = io.StringIO(content)
+    file_obj.__exit__.return_value = None
+    return file_obj
 
-@pytest.mark.parametrize(""filepath,json_content,expected"", [
-    (""config.json"", '{""key"": ""value""}', {""key"": ""value""}),
-    (""data.json"", '{""num"": 42}', {""num"": 42}),
-    (""/path/to/file.json"", '{""list"": [1, 2, 3]}', {""list"": [1, 2, 3]}),
-])
-def test_parse_json_file(filepath, json_content, expected):
-    mock_reader = Mock(return_value=json_content)
-    result = parse_json_file(filepath, mock_reader)
-    assert result == expected
-    mock_reader.assert_called_once_with(filepath)
 
-def test_parse_json_file_not_found():
-    mock_reader = Mock(side_effect=FileNotFoundError(""File not found""))
+def test_import_and_validate_csv_success_with_header(mock_fs, mock_validator, mock_logger):
+    csv_content = ""id,name,age\n1,Alice,30\n2,Bob,25\n""
+    mock_fs.open.return_value = _make_file_mock(csv_content)
+
+    mock_validator.side_effect = lambda row: True
+
+    result = import_and_validate_csv(
+        file_path=""data.csv"",
+        fs=mock_fs,
+        validator=mock_validator,
+        delimiter="","",
+        has_header=True,
+        logger=mock_logger,
+    )
+
+    assert result == [
+        {""id"": ""1"", ""name"": ""Alice"", ""age"": ""30""},
+        {""id"": ""2"", ""name"": ""Bob"", ""age"": ""25""},
+    ]
+    mock_fs.open.assert_called_once_with(""data.csv"", ""r"")
+    assert mock_validator.call_count == 2
+    mock_logger.debug.assert_called()
+    mock_logger.warning.assert_not_called()
+
+
+def test_import_and_validate_csv_skip_invalid_rows(mock_fs, mock_validator, mock_logger):
+    csv_content = ""id,name\n1,Valid\n2,Invalid\n3,ValidAgain\n""
+    mock_fs.open.return_value = _make_file_mock(csv_content)
+
+    def validator(row):
+        if row[""name""] == ""Invalid"":
+            raise ValueError(""invalid row"")
+        return True
+
+    mock_validator.side_effect = validator
+
+    result = import_and_validate_csv(
+        file_path=""data.csv"",
+        fs=mock_fs,
+        validator=mock_validator,
+        delimiter="","",
+        has_header=True,
+        logger=mock_logger,
+    )
+
+    assert result == [
+        {""id"": ""1"", ""name"": ""Valid""},
+        {""id"": ""3"", ""name"": ""ValidAgain""},
+    ]
+    mock_logger.warning.assert_called()
+    # Ensure warning called with row that caused ValueError
+    warning_args = mock_logger.warning.call_args[0][0]
+    assert ""invalid row"" in warning_args or ""Invalid"" in warning_args
+
+
+def test_import_and_validate_csv_file_not_found(mock_fs, mock_validator, mock_logger):
+    mock_fs.open.side_effect = FileNotFoundError
+
     with pytest.raises(FileNotFoundError):
-        parse_json_file(""missing.json"", mock_reader)
+        import_and_validate_csv(
+            file_path=""missing.csv"",
+            fs=mock_fs,
+            validator=mock_validator,
+            logger=mock_logger,
+        )
 
-def test_parse_json_file_invalid_json():
-    mock_reader = Mock(return_value=""{invalid json}"")
-    with pytest.raises(ValueError):
-        parse_json_file(""bad.json"", mock_reader)",,
-"def format_currency(amount: float, currency_code: str) -> str:
-    """"""
-    Format amount as currency string.
-    
-    Args:
-        amount: Numeric amount to format
-        currency_code: ISO currency code (USD, EUR, etc.)
-    
-    Returns:
-        Formatted currency string
-    
-    Raises:
-        ValueError: If currency_code is not supported
-    """"""","import pytest
+    mock_fs.open.assert_called_once_with(""missing.csv"", ""r"")
+    mock_logger.error.assert_not_called()
 
-@pytest.mark.parametrize(""amount,currency,expected"", [
-    (100.50, ""USD"", ""$100.50""),
-    (50.0, ""EUR"", ""€50.00""),
-    (999.99, ""GBP"", ""£999.99""),
-])
-def test_format_currency(amount, currency, expected):
-    assert format_currency(amount, currency) == expected
 
-def test_format_currency_edge_cases():
-    assert format_currency(0.0, ""USD"") == ""$0.00""
-    assert format_currency(1000000.0, ""USD"") == ""$1,000,000.00""
+def test_import_and_validate_csv_malformed_csv_error(mock_fs, mock_validator, mock_logger):
+    # Create malformed CSV: uneven number of columns
+    csv_content = ""id,name,age\n1,Alice\n2,Bob,25,extra\n""
+    mock_fs.open.return_value = _make_file_mock(csv_content)
 
-def test_format_currency_unsupported_code():
-    with pytest.raises(ValueError):
-        format_currency(100.0, ""XYZ"")
-    with pytest.raises(ValueError):
-        format_currency(100.0, """")",,
-"def send_notification(user_id: int, message: str, sms_sender, email_sender) -> dict:
-    """"""
-    Send notification via SMS and email.
-    
-    Args:
-        user_id: User identifier
-        message: Notification message
-        sms_sender: SMS sending service
-        email_sender: Email sending service
-    
-    Returns:
-        Dictionary with delivery status for each channel
-    
-    Raises:
-        ValueError: If message is empty
-        ConnectionError: If both channels fail
-    
-    # Dependencies: sms_sender.send(), email_sender.send()
-    """"""","import pytest
-from unittest.mock import Mock
+    mock_validator.side_effect = lambda row: True
 
-@pytest.mark.parametrize(""user_id,message"", [
-    (1, ""Test message""),
-    (999, ""Important alert""),
-    (42, ""Hello world""),
-])
-def test_send_notification(user_id, message):
-    mock_sms = Mock()
-    mock_sms.send.return_value = True
-    mock_email = Mock()
-    mock_email.send.return_value = True
-    result = send_notification(user_id, message, mock_sms, mock_email)
-    assert result[""sms""] == True
-    assert result[""email""] == True
-    mock_sms.send.assert_called_once_with(user_id, message)
-    mock_email.send.assert_called_once_with(user_id, message)
+    with pytest.raises(csv.Error):
+        import_and_validate_csv(
+            file_path=""bad.csv"",
+            fs=mock_fs,
+            validator=mock_validator,
+            logger=mock_logger,
+        )
 
-def test_send_notification_empty_message():
-    mock_sms = Mock()
-    mock_email = Mock()
-    with pytest.raises(ValueError):
-        send_notification(1, """", mock_sms, mock_email)
+    mock_logger.error.assert_not_called()
 
-def test_send_notification_both_fail():
-    mock_sms = Mock()
-    mock_sms.send.side_effect = ConnectionError(""SMS failed"")
-    mock_email = Mock()
-    mock_email.send.side_effect = ConnectionError(""Email failed"")
-    with pytest.raises(ConnectionError):
-        send_notification(1, ""Test"", mock_sms, mock_email)",,
-"def generate_report(data: list[dict], template_engine, export_pdf) -> str:
-    """"""
-    Generate PDF report from data.
-    
-    Args:
-        data: List of data dictionaries
-        template_engine: Template rendering engine
-        export_pdf: PDF export function
-    
-    Returns:
-        Path to generated PDF file
-    
-    Raises:
-        ValueError: If data is empty
-        RuntimeError: If PDF generation fails
-    
-    # Dependencies: template_engine.render(), export_pdf()
-    """"""","import pytest
-from unittest.mock import Mock
 
-@pytest.mark.parametrize(""data,expected_path"", [
-    ([{""id"": 1, ""value"": 100}], ""/reports/report_1.pdf""),
-    ([{""id"": 2, ""value"": 200}, {""id"": 3, ""value"": 300}], ""/reports/report_2.pdf""),
-])
-def test_generate_report(data, expected_path):
-    mock_template = Mock()
-    mock_template.render.return_value = ""<html>Report</html>""
-    mock_export = Mock(return_value=expected_path)
-    result = generate_report(data, mock_template, mock_export)
-    assert result == expected_path
-    mock_template.render.assert_called_once_with(data)
-    mock_export.assert_called_once_with(""<html>Report</html>"")
+def test_import_and_validate_csv_io_error_during_read(mock_fs, mock_validator, mock_logger):
+    # Mock file object that raises IOError on iteration
+    file_mock = MagicMock()
+    file_mock.__enter__.return_value = MagicMock()
+    file_mock.__enter__.return_value.__iter__.side_effect = IOError
+    file_mock.__exit__.return_value = None
+    mock_fs.open.return_value = file_mock
 
-def test_generate_report_empty_data():
-    mock_template = Mock()
-    mock_export = Mock()
-    with pytest.raises(ValueError):
-        generate_report([], mock_template, mock_export)
-
-def test_generate_report_export_failure():
-    mock_template = Mock()
-    mock_template.render.return_value = ""<html>Report</html>""
-    mock_export = Mock(side_effect=RuntimeError(""Export failed""))
-    with pytest.raises(RuntimeError):
-        generate_report([{""id"": 1}], mock_template, mock_export)",,
-"def cache_get_or_compute(key: str, cache, compute_fn) -> any:
-    """"""
-    Get value from cache or compute if missing.
-    
-    Args:
-        key: Cache key
-        cache: Cache storage instance
-        compute_fn: Function to compute value if not cached
-    
-    Returns:
-        Cached or computed value
-    
-    Raises:
-        KeyError: If key is invalid
-        RuntimeError: If compute function fails
-    
-    # Dependencies: cache.get(), cache.set(), compute_fn()
-    """"""","import pytest
-from unittest.mock import Mock
-
-@pytest.mark.parametrize(""key,cached_value"", [
-    (""user:123"", {""name"": ""Alice""}),
-    (""product:456"", {""price"": 99.99}),
-])
-def test_cache_get_cached_value(key, cached_value):
-    mock_cache = Mock()
-    mock_cache.get.return_value = cached_value
-    mock_compute = Mock()
-    result = cache_get_or_compute(key, mock_cache, mock_compute)
-    assert result == cached_value
-    mock_cache.get.assert_called_once_with(key)
-    mock_compute.assert_not_called()
-
-def test_cache_get_compute_missing():
-    mock_cache = Mock()
-    mock_cache.get.return_value = None
-    mock_compute = Mock(return_value={""computed"": ""value""})
-    result = cache_get_or_compute(""missing:key"", mock_cache, mock_compute)
-    assert result == {""computed"": ""value""}
-    mock_cache.set.assert_called_once_with(""missing:key"", {""computed"": ""value""})
-
-def test_cache_get_compute_failure():
-    mock_cache = Mock()
-    mock_cache.get.return_value = None
-    mock_compute = Mock(side_effect=RuntimeError(""Compute failed""))
-    with pytest.raises(RuntimeError):
-        cache_get_or_compute(""key"", mock_cache, mock_compute)",,
-"def batch_process_items(items: list, processor, error_handler) -> dict:
-    """"""
-    Process items in batch with error handling.
-    
-    Args:
-        items: List of items to process
-        processor: Function to process each item
-        error_handler: Function to handle processing errors
-    
-    Returns:
-        Dictionary with 'success' and 'failed' counts
-    
-    Raises:
-        ValueError: If items list is empty
-    
-    # Dependencies: processor(), error_handler()
-    """"""","import pytest
-from unittest.mock import Mock
-
-@pytest.mark.parametrize(""items,expected_success"", [
-    ([1, 2, 3], 3),
-    ([""a"", ""b""], 2),
-])
-def test_batch_process_all_success(items, expected_success):
-    mock_processor = Mock(return_value=True)
-    mock_error_handler = Mock()
-    result = batch_process_items(items, mock_processor, mock_error_handler)
-    assert result[""success""] == expected_success
-    assert result[""failed""] == 0
-    assert mock_processor.call_count == expected_success
-    mock_error_handler.assert_not_called()
-
-def test_batch_process_with_errors():
-    mock_processor = Mock(side_effect=[True, Exception(""Error""), True])
-    mock_error_handler = Mock()
-    result = batch_process_items([1, 2, 3], mock_processor, mock_error_handler)
-    assert result[""success""] == 2
-    assert result[""failed""] == 1
-    mock_error_handler.assert_called_once()
-
-def test_batch_process_empty_items():
-    mock_processor = Mock()
-    mock_error_handler = Mock()
-    with pytest.raises(ValueError):
-        batch_process_items([], mock_processor, mock_error_handler)",,
-"def authenticate_user(username: str, password: str, auth_service, session_manager) -> str:
-    """"""
-    Authenticate user and create session.
-    
-    Args:
-        username: User's username
-        password: User's password
-        auth_service: Authentication service
-        session_manager: Session management service
-    
-    Returns:
-        Session token as string
-    
-    Raises:
-        ValueError: If credentials are invalid
-        ConnectionError: If auth service is unavailable
-    
-    # Dependencies: auth_service.verify(), session_manager.create()
-    """"""","import pytest
-from unittest.mock import Mock
-
-@pytest.mark.parametrize(""username,password,expected_token"", [
-    (""alice"", ""pass123"", ""token-abc""),
-    (""bob"", ""secret"", ""token-xyz""),
-])
-def test_authenticate_user(username, password, expected_token):
-    mock_auth = Mock()
-    mock_auth.verify.return_value = True
-    mock_session = Mock()
-    mock_session.create.return_value = expected_token
-    result = authenticate_user(username, password, mock_auth, mock_session)
-    assert result == expected_token
-    mock_auth.verify.assert_called_once_with(username, password)
-    mock_session.create.assert_called_once_with(username)
-
-def test_authenticate_user_invalid_credentials():
-    mock_auth = Mock()
-    mock_auth.verify.return_value = False
-    mock_session = Mock()
-    with pytest.raises(ValueError):
-        authenticate_user(""user"", ""wrong"", mock_auth, mock_session)
-
-def test_authenticate_user_service_unavailable():
-    mock_auth = Mock()
-    mock_auth.verify.side_effect = ConnectionError(""Service down"")
-    mock_session = Mock()
-    with pytest.raises(ConnectionError):
-        authenticate_user(""user"", ""pass"", mock_auth, mock_session)",,
-"def transform_data(input_data: dict, transformer, validator) -> dict:
-    """"""
-    Transform and validate data.
-    
-    Args:
-        input_data: Input dictionary to transform
-        transformer: Data transformation function
-        validator: Data validation function
-    
-    Returns:
-        Transformed and validated dictionary
-    
-    Raises:
-        ValueError: If validation fails
-        TypeError: If input_data is not a dictionary
-    
-    # Dependencies: transformer(), validator()
-    """"""","import pytest
-from unittest.mock import Mock
-
-@pytest.mark.parametrize(""input_data,transformed"", [
-    ({""x"": 1}, {""x"": 2}),
-    ({""name"": ""test""}, {""name"": ""TEST""}),
-])
-def test_transform_data(input_data, transformed):
-    mock_transformer = Mock(return_value=transformed)
-    mock_validator = Mock(return_value=True)
-    result = transform_data(input_data, mock_transformer, mock_validator)
-    assert result == transformed
-    mock_transformer.assert_called_once_with(input_data)
-    mock_validator.assert_called_once_with(transformed)
-
-def test_transform_data_validation_failure():
-    mock_transformer = Mock(return_value={""invalid"": ""data""})
-    mock_validator = Mock(return_value=False)
-    with pytest.raises(ValueError):
-        transform_data({""x"": 1}, mock_transformer, mock_validator)
-
-def test_transform_data_type_error():
-    mock_transformer = Mock()
-    mock_validator = Mock()
-    with pytest.raises(TypeError):
-        transform_data(""not_dict"", mock_transformer, mock_validator)",,
-"def schedule_job(job_id: str, cron_expr: str, scheduler, notifier) -> bool:
-    """"""
-    Schedule a job with cron expression.
-    
-    Args:
-        job_id: Unique job identifier
-        cron_expr: Cron expression for scheduling
-        scheduler: Job scheduling service
-        notifier: Notification service for job events
-    
-    Returns:
-        True if job scheduled successfully
-    
-    Raises:
-        ValueError: If cron expression is invalid
-        RuntimeError: If scheduling fails
-    
-    # Dependencies: scheduler.add_job(), notifier.send()
-    """"""","import pytest
-from unittest.mock import Mock
-
-@pytest.mark.parametrize(""job_id,cron_expr"", [
-    (""job-1"", ""0 0 * * *""),
-    (""job-2"", ""*/5 * * * *""),
-])
-def test_schedule_job(job_id, cron_expr):
-    mock_scheduler = Mock()
-    mock_scheduler.add_job.return_value = True
-    mock_notifier = Mock()
-    result = schedule_job(job_id, cron_expr, mock_scheduler, mock_notifier)
-    assert result == True
-    mock_scheduler.add_job.assert_called_once_with(job_id, cron_expr)
-    mock_notifier.send.assert_called_once()
-
-def test_schedule_job_invalid_cron():
-    mock_scheduler = Mock()
-    mock_notifier = Mock()
-    with pytest.raises(ValueError):
-        schedule_job(""job-1"", ""invalid-cron"", mock_scheduler, mock_notifier)
-
-def test_schedule_job_scheduling_failure():
-    mock_scheduler = Mock()
-    mock_scheduler.add_job.side_effect = RuntimeError(""Scheduling failed"")
-    mock_notifier = Mock()
-    with pytest.raises(RuntimeError):
-        schedule_job(""job-1"", ""0 0 * * *"", mock_scheduler, mock_notifier)",,
-"def export_to_csv(data: list[dict], filepath: str, file_writer) -> int:
-    """"""
-    Export data to CSV file.
-    
-    Args:
-        data: List of dictionaries to export
-        filepath: Destination file path
-        file_writer: File writing function
-    
-    Returns:
-        Number of rows written
-    
-    Raises:
-        ValueError: If data is empty
-        IOError: If file writing fails
-    
-    # Dependencies: file_writer()
-    """"""","import pytest
-from unittest.mock import Mock
-
-@pytest.mark.parametrize(""data,expected_rows"", [
-    ([{""id"": 1, ""name"": ""Alice""}], 1),
-    ([{""id"": 1}, {""id"": 2}, {""id"": 3}], 3),
-])
-def test_export_to_csv(data, expected_rows):
-    mock_writer = Mock()
-    result = export_to_csv(data, ""output.csv"", mock_writer)
-    assert result == expected_rows
-    mock_writer.assert_called_once()
-
-def test_export_to_csv_empty_data():
-    mock_writer = Mock()
-    with pytest.raises(ValueError):
-        export_to_csv([], ""output.csv"", mock_writer)
-
-def test_export_to_csv_write_failure():
-    mock_writer = Mock(side_effect=IOError(""Write failed""))
     with pytest.raises(IOError):
-        export_to_csv([{""id"": 1}], ""output.csv"", mock_writer)",,
-"def fetch_and_parse(url: str, http_client, parser) -> dict:
-    """"""
-    Fetch content from URL and parse it.
-    
+        import_and_validate_csv(
+            file_path=""io_error.csv"",
+            fs=mock_fs,
+            validator=mock_validator,
+            logger=mock_logger,
+        )
+
+    mock_fs.open.assert_called_once_with(""io_error.csv"", ""r"")
+    mock_logger.error.assert_not_called()"
+"def send_bulk_emails(
+    recipients: List[str],
+    subject: str,
+    body_template: str,
+    smtp_client,
+    logger: Optional[Logger] = None,
+) -> Dict[str, bool]:
+    """"""Sends an email to a list of recipients using the provided SMTP client.
+
     Args:
-        url: URL to fetch content from
-        http_client: HTTP client instance
-        parser: Content parsing function
-    
+        recipients: List of email addresses to send the message to.
+        subject: Subject line of the email.
+        body_template: String template for the email body; may contain ``{email}`` placeholder.
+        smtp_client: Object exposing ``send_email(to: str, subject: str, body: str) -> None``.
+            May raise ``SMTPError`` on failure.
+        logger: Optional logger with an ``info(message: str)`` method for audit logging.
+
     Returns:
-        Parsed content as dictionary
-    
+        A mapping from each recipient email address to ``True`` if the email was sent
+        successfully, or ``False`` if sending failed for that address.
+
     Raises:
-        ConnectionError: If URL is unreachable
-        ValueError: If parsing fails
-    
-    # Dependencies: http_client.get(), parser()
-    """"""","import pytest
-from unittest.mock import Mock
+        ValueError: If ``recipients`` is empty or any email address is malformed.
+        SMTPError: Propagated if ``smtp_client.send_email`` raises an exception for a recipient.
 
-@pytest.mark.parametrize(""url,content,parsed"", [
-    (""http://api.example.com/data"", '{""key"": ""value""}', {""key"": ""value""}),
-    (""https://example.com/json"", '{""id"": 123}', {""id"": 123}),
-])
-def test_fetch_and_parse(url, content, parsed):
-    mock_client = Mock()
-    mock_client.get.return_value = content
-    mock_parser = Mock(return_value=parsed)
-    result = fetch_and_parse(url, mock_client, mock_parser)
-    assert result == parsed
-    mock_client.get.assert_called_once_with(url)
-    mock_parser.assert_called_once_with(content)
+    Dependencies:
+        - smtp_client: method ``send_email(to: str, subject: str, body: str) -> None``.
+        - logger (optional): method ``info(message: str)``.
+    """"""
+    ...
 
-def test_fetch_and_parse_connection_error():
-    mock_client = Mock()
-    mock_client.get.side_effect = ConnectionError(""Unreachable"")
-    mock_parser = Mock()
-    with pytest.raises(ConnectionError):
-        fetch_and_parse(""http://example.com"", mock_client, mock_parser)
+# Dependency specifications
+# - SMTP client: ``send_email`` may raise ``SMTPError``.
+# - Logger (optional): ``info`` for logging.","import pytest
+from unittest.mock import MagicMock
 
-def test_fetch_and_parse_parse_error():
-    mock_client = Mock()
-    mock_client.get.return_value = ""invalid content""
-    mock_parser = Mock(side_effect=ValueError(""Parse failed""))
+from email_module import send_bulk_emails, SMTPError
+
+
+@pytest.fixture
+def logger():
+    return MagicMock()
+
+
+@pytest.fixture
+def smtp_client():
+    return MagicMock()
+
+
+def test_send_bulk_emails_happy_path(smtp_client, logger):
+    recipients = [""alice@example.com"", ""bob@example.com""]
+    subject = ""Test Subject""
+    body_template = ""Hello {email}, this is a test.""
+
+    result = send_bulk_emails(recipients, subject, body_template, smtp_client, logger)
+
+    assert result == {r: True for r in recipients}
+    expected_calls = [
+        ((recipients[0], subject, ""Hello alice@example.com, this is a test.""),),
+        ((recipients[1], subject, ""Hello bob@example.com, this is a test.""),),
+    ]
+    actual_calls = smtp_client.send_email.call_args_list
+    assert len(actual_calls) == len(expected_calls)
+    for call, expected in zip(actual_calls, expected_calls):
+        assert call[0] == expected[0]
+    assert logger.info.call_count == len(recipients)
+
+
+def test_send_bulk_emails_empty_recipients_raises():
     with pytest.raises(ValueError):
-        fetch_and_parse(""http://example.com"", mock_client, mock_parser)",,
-"def sync_database(source_db, target_db, logger) -> dict:
-    """"""
-    Synchronize data between two databases.
-    
-    Args:
-        source_db: Source database connection
-        target_db: Target database connection
-        logger: Logger for sync operations
-    
-    Returns:
-        Dictionary with sync statistics
-    
-    Raises:
-        ConnectionError: If database connection fails
-        RuntimeError: If sync operation fails
-    
-    # Dependencies: source_db.fetch_all(), target_db.insert_batch(), logger.info()
-    """"""","import pytest
-from unittest.mock import Mock
+        send_bulk_emails([], ""Subject"", ""Body {email}"", MagicMock())
 
-@pytest.mark.parametrize(""records,expected_count"", [
-    ([{""id"": 1}], 1),
-    ([{""id"": 1}, {""id"": 2}, {""id"": 3}], 3),
-])
-def test_sync_database(records, expected_count):
-    mock_source = Mock()
-    mock_source.fetch_all.return_value = records
-    mock_target = Mock()
-    mock_target.insert_batch.return_value = expected_count
-    mock_logger = Mock()
-    result = sync_database(mock_source, mock_target, mock_logger)
-    assert result[""synced""] == expected_count
-    mock_source.fetch_all.assert_called_once()
-    mock_target.insert_batch.assert_called_once_with(records)
+
+@pytest.mark.parametrize(
+    ""bad_email"",
+    [""invalid-email"", ""no-at-sign.com"", ""@missinguser.com"", ""user@.com""],
+)
+def test_send_bulk_emails_malformed_email_raises(bad_email):
+    with pytest.raises(ValueError):
+        send_bulk_emails([bad_email], ""Subject"", ""Body {email}"", MagicMock())
+
+
+def test_send_bulk_emails_smtp_error_propagates(smtp_client, logger):
+    recipients = [""first@example.com"", ""second@example.com"", ""third@example.com""]
+    subject = ""Subject""
+    body_template = ""Hi {email}""
+
+    def side_effect(to, subj, body):
+        if to == ""second@example.com"":
+            raise SMTPError(""SMTP failure"")
+        return None
+
+    smtp_client.send_email.side_effect = side_effect
+
+    with pytest.raises(SMTPError):
+        send_bulk_emails(recipients, subject, body_template, smtp_client, logger)
+
+    # First email should have been attempted before error
+    smtp_client.send_email.assert_any_call(
+        ""first@example.com"", subject, ""Hi first@example.com""
+    )
+    # Second email raised the error; third should not be sent
+    assert smtp_client.send_email.call_count == 2
+    logger.info.assert_called_once_with(
+        f""Email sent to first@example.com""
+    )"
+"class PaymentProcessor:
+    def charge_customer(
+        self,
+        customer_id: str,
+        amount_cents: int,
+        currency: str,
+        payment_gateway,
+        fraud_service,
+        *,
+        metadata: dict | None = None,
+        logger=None,
+    ) -> str:
+        """"""Charges a customer using an external payment gateway after fraud checks.
+
+        Args:
+            customer_id (str): Unique identifier of the customer in the local system.
+            amount_cents (int): Amount to charge in the smallest currency unit; must be > 0.
+            currency (str): ISO 4217 currency code (e.g., ``\""USD\""``).
+            payment_gateway: Object exposing ``charge(customer_id: str, amount_cents: int, currency: str, metadata: dict) -> dict``
+                where the returned dict contains ``\""status\""`` (``\""succeeded\""`` or ``\""failed\""``) and ``\""transaction_id\""``.
+            fraud_service: Service with ``evaluate(customer_id: str, amount_cents: int) -> bool`` returning ``True`` if the transaction is considered safe.
+            metadata (dict, optional): Additional key‑value pairs to forward to the gateway. Defaults to ``None``.
+            logger (optional): Logger with ``info`` and ``error`` methods for audit logging.
+
+        Returns:
+            str: The ``transaction_id`` returned by ``payment_gateway`` when the charge succeeds.
+
+        Raises:
+            ValueError: If ``amount_cents`` is non‑positive or ``currency`` is not a three‑letter code.
+            FraudDetectedError: If ``fraud_service.evaluate`` returns ``False``.
+            PaymentFailedError: If ``payment_gateway.charge`` returns a status of ``\""failed\""``.
+            PaymentGatewayError: Propagated if ``payment_gateway.charge`` raises an exception.
+
+        Dependencies:
+            - payment_gateway: Provides ``charge`` method; may raise ``PaymentGatewayError``.
+            - fraud_service: Provides ``evaluate`` method; may raise ``FraudServiceError``.
+            - logger (optional): Used for logging successes and failures.
+            - config (optional): Module with ``MAX_TRANSACTION_AMOUNT_CENTS`` to enforce upper limits.
+        """"""
+        ...","import pytest
+from unittest.mock import MagicMock, ANY, patch
+
+import importlib
+
+module = importlib.import_module(""payment_processor"")
+PaymentProcessor = getattr(module, ""PaymentProcessor"")
+FraudDetectedError = getattr(module, ""FraudDetectedError"", Exception)
+PaymentFailedError = getattr(module, ""PaymentFailedError"", Exception)
+PaymentGatewayError = getattr(module, ""PaymentGatewayError"", Exception)
+FraudServiceError = getattr(module, ""FraudServiceError"", Exception)
+
+
+@pytest.fixture
+def processor():
+    return PaymentProcessor()
+
+
+@pytest.fixture
+def mock_gateway():
+    return MagicMock()
+
+
+@pytest.fixture
+def mock_fraud():
+    return MagicMock()
+
+
+@pytest.fixture
+def mock_logger():
+    return MagicMock()
+
+
+def test_charge_customer_success(processor, mock_gateway, mock_fraud, mock_logger):
+    mock_fraud.evaluate.return_value = True
+    mock_gateway.charge.return_value = {""status"": ""succeeded"", ""transaction_id"": ""tx123""}
+
+    result = processor.charge_customer(
+        ""cust123"",
+        1500,
+        ""USD"",
+        payment_gateway=mock_gateway,
+        fraud_service=mock_fraud,
+        metadata={""order_id"": ""order456""},
+        logger=mock_logger,
+    )
+
+    assert result == ""tx123""
+    mock_fraud.evaluate.assert_called_once_with(""cust123"", 1500)
+    mock_gateway.charge.assert_called_once_with(
+        ""cust123"", 1500, ""USD"", {""order_id"": ""order456""}
+    )
+    mock_logger.info.assert_called()
+
+
+@pytest.mark.parametrize(""amount"", [0, -100])
+def test_charge_customer_invalid_amount(processor, mock_gateway, mock_fraud, mock_logger, amount):
+    with pytest.raises(ValueError):
+        processor.charge_customer(
+            ""cust123"",
+            amount,
+            ""USD"",
+            payment_gateway=mock_gateway,
+            fraud_service=mock_fraud,
+            logger=mock_logger,
+        )
+
+
+@pytest.mark.parametrize(""currency"", [""US"", ""USDD"", ""usd1"", """"])
+def test_charge_customer_invalid_currency(processor, mock_gateway, mock_fraud, mock_logger, currency):
+    with pytest.raises(ValueError):
+        processor.charge_customer(
+            ""cust123"",
+            500,
+            currency,
+            payment_gateway=mock_gateway,
+            fraud_service=mock_fraud,
+            logger=mock_logger,
+        )
+
+
+def test_charge_customer_fraud_detected(processor, mock_gateway, mock_fraud, mock_logger):
+    mock_fraud.evaluate.return_value = False
+
+    with pytest.raises(FraudDetectedError):
+        processor.charge_customer(
+            ""cust123"",
+            500,
+            ""EUR"",
+            payment_gateway=mock_gateway,
+            fraud_service=mock_fraud,
+            logger=mock_logger,
+        )
+
+    mock_fraud.evaluate.assert_called_once_with(""cust123"", 500)
+    mock_gateway.charge.assert_not_called()
+    mock_logger.error.assert_called()
+
+
+def test_charge_customer_payment_failed(processor, mock_gateway, mock_fraud, mock_logger):
+    mock_fraud.evaluate.return_value = True
+    mock_gateway.charge.return_value = {""status"": ""failed"", ""transaction_id"": ""tx999""}
+
+    with pytest.raises(PaymentFailedError):
+        processor.charge_customer(
+            ""cust123"",
+            750,
+            ""GBP"",
+            payment_gateway=mock_gateway,
+            fraud_service=mock_fraud,
+            logger=mock_logger,
+        )
+
+    mock_fraud.evaluate.assert_called_once_with(""cust123"", 750)
+    mock_gateway.charge.assert_called_once_with(""cust123"", 750, ""GBP"", None)
+    mock_logger.error.assert_called()
+
+
+def test_charge_customer_gateway_error_propagates(processor, mock_gateway, mock_fraud, mock_logger):
+    mock_fraud.evaluate.return_value = True
+    mock_gateway.charge.side_effect = PaymentGatewayError(""gateway failure"")
+
+    with pytest.raises(PaymentGatewayError):
+        processor.charge_customer(
+            ""cust123"",
+            1200,
+            ""JPY"",
+            payment_gateway=mock_gateway,
+            fraud_service=mock_fraud,
+            logger=mock_logger,
+        )
+
+    mock_fraud.evaluate.assert_called_once_with(""cust123"", 1200)
+    mock_gateway.charge.assert_called_once_with(""cust123"", 1200, ""JPY"", None)
+    mock_logger.error.assert_called()
+
+
+def test_charge_customer_exceeds_max_transaction_amount(processor, mock_gateway, mock_fraud, mock_logger):
+    # Assume the config module defines MAX_TRANSACTION_AMOUNT_CENTS
+    with patch(""payment_processor.config"") as mock_config:
+        mock_config.MAX_TRANSACTION_AMOUNT_CENTS = 1000
+        mock_fraud.evaluate.return_value = True
+
+        with pytest.raises(ValueError):
+            processor.charge_customer(
+                ""cust123"",
+                1500,
+                ""USD"",
+                payment_gateway=mock_gateway,
+                fraud_service=mock_fraud,
+                logger=mock_logger,
+            )
+
+        mock_fraud.evaluate.assert_not_called()
+        mock_gateway.charge.assert_not_called()
+        mock_logger.error.assert_called()"
+"def process_payment(
+    order_id: str,
+    amount: float,
+    payment_gateway,
+    fraud_service,
+    logger: Optional[Logger] = None,
+    retry_policy=None,
+) -> str:
+    """"""Processes a payment for a given order.
+
+    Args:
+        order_id: Unique identifier for the order, must match ``r""^ORD-[A-Z0-9]{8}$""``.
+        amount: Monetary amount to be charged; must be positive.
+        payment_gateway: Object exposing ``charge(order_id: str, amount: float) -> str`` which returns
+            a transaction ID. May raise ``GatewayError``.
+        fraud_service: Service with ``check(order_id: str, amount: float) -> bool`` returning ``True``
+            if the transaction is flagged as fraudulent. May raise ``FraudError``.
+        logger (optional): ``logging.Logger`` for audit logging of each step.
+        retry_policy (optional): Callable ``retry_policy(func, *args, **kwargs) -> Any`` that wraps
+            ``payment_gateway.charge`` to implement retry logic. May raise ``RetryError``.
+
+    Returns:
+        Transaction ID string returned by ``payment_gateway.charge`` when the payment succeeds.
+
+    Raises:
+        ValueError: If ``order_id`` does not match the required pattern or ``amount`` is non‑positive.
+        FraudError: Propagated if ``fraud_service.check`` flags the transaction.
+        GatewayError: Propagated from ``payment_gateway.charge`` when the charge fails.
+        RetryError: Propagated from ``retry_policy`` if all retries are exhausted.
+
+    Dependencies:
+        - payment_gateway: method ``charge(order_id: str, amount: float) -> str``.
+        - fraud_service: method ``check(order_id: str, amount: float) -> bool``.
+        - logger (optional): standard ``logging.Logger`` instance.
+        - retry_policy (optional): callable for retrying the charge operation.
+    """"""
+
+# Dependency specifications
+# - payment_gateway: ``charge`` may raise ``GatewayError``.
+# - fraud_service: ``check`` may raise ``FraudError``.
+# - logger (optional): ``info``/``error`` methods.
+# - retry_policy (optional): callable that may raise ``RetryError``.","import pytest
+from unittest.mock import MagicMock, call
+import importlib
+
+module = importlib.import_module(""payment_module"")
+process_payment = getattr(module, ""process_payment"")
+GatewayError = getattr(module, ""GatewayError"", Exception)
+FraudError = getattr(module, ""FraudError"", Exception)
+RetryError = getattr(module, ""RetryError"", Exception)
+
+
+@pytest.fixture
+def mock_payment_gateway():
+    gateway = MagicMock()
+    gateway.charge = MagicMock(return_value=""tx-12345"")
+    return gateway
+
+
+@pytest.fixture
+def mock_fraud_service():
+    service = MagicMock()
+    service.check = MagicMock(return_value=False)
+    return service
+
+
+@pytest.fixture
+def mock_logger():
+    return MagicMock()
+
+
+@pytest.fixture
+def mock_retry_policy():
+    return MagicMock(return_value=""tx-retried"")
+
+
+def test_process_payment_success(
+    mock_payment_gateway,
+    mock_fraud_service,
+    mock_logger,
+):
+    order_id = ""ORD-ABCD1234""
+    amount = 100.0
+
+    tx_id = process_payment(
+        order_id,
+        amount,
+        payment_gateway=mock_payment_gateway,
+        fraud_service=mock_fraud_service,
+        logger=mock_logger,
+    )
+
+    assert tx_id == ""tx-12345""
+    mock_fraud_service.check.assert_called_once_with(order_id, amount)
+    mock_payment_gateway.charge.assert_called_once_with(order_id, amount)
     assert mock_logger.info.called
 
-def test_sync_database_connection_error():
-    mock_source = Mock()
-    mock_source.fetch_all.side_effect = ConnectionError(""Connection failed"")
-    mock_target = Mock()
-    mock_logger = Mock()
-    with pytest.raises(ConnectionError):
-        sync_database(mock_source, mock_target, mock_logger)
 
-def test_sync_database_sync_failure():
-    mock_source = Mock()
-    mock_source.fetch_all.return_value = [{""id"": 1}]
-    mock_target = Mock()
-    mock_target.insert_batch.side_effect = RuntimeError(""Sync failed"")
-    mock_logger = Mock()
-    with pytest.raises(RuntimeError):
-        sync_database(mock_source, mock_target, mock_logger)",,
-"def compress_and_upload(data: bytes, compressor, uploader) -> str:
-    """"""
-    Compress data and upload to storage.
-    
-    Args:
-        data: Raw bytes to compress and upload
-        compressor: Compression function
-        uploader: Upload function
-    
-    Returns:
-        URL of uploaded file
-    
-    Raises:
-        ValueError: If data is empty
-        RuntimeError: If compression or upload fails
-    
-    # Dependencies: compressor(), uploader()
-    """"""","import pytest
-from unittest.mock import Mock
+def test_process_payment_with_retry_policy(
+    mock_payment_gateway,
+    mock_fraud_service,
+    mock_logger,
+    mock_retry_policy,
+):
+    order_id = ""ORD-XYZ98765""
+    amount = 250.0
 
-@pytest.mark.parametrize(""data,compressed,url"", [
-    (b""test data"", b""compressed"", ""https://storage.com/file1""),
-    (b""large file content"", b""comp"", ""https://storage.com/file2""),
-])
-def test_compress_and_upload(data, compressed, url):
-    mock_compressor = Mock(return_value=compressed)
-    mock_uploader = Mock(return_value=url)
-    result = compress_and_upload(data, mock_compressor, mock_uploader)
-    assert result == url
-    mock_compressor.assert_called_once_with(data)
-    mock_uploader.assert_called_once_with(compressed)
+    tx_id = process_payment(
+        order_id,
+        amount,
+        payment_gateway=mock_payment_gateway,
+        fraud_service=mock_fraud_service,
+        logger=mock_logger,
+        retry_policy=mock_retry_policy,
+    )
 
-def test_compress_and_upload_empty_data():
-    mock_compressor = Mock()
-    mock_uploader = Mock()
+    assert tx_id == ""tx-retried""
+    mock_fraud_service.check.assert_called_once_with(order_id, amount)
+    mock_retry_policy.assert_called_once()
+    # ensure retry_policy received the charge method and original args
+    args, kwargs = mock_retry_policy.call_args
+    assert args[0] == mock_payment_gateway.charge
+    assert args[1] == order_id
+    assert args[2] == amount
+    assert mock_logger.info.called
+
+
+@pytest.mark.parametrize(
+    ""order_id"",
+    [
+        ""INVALID-1234"",
+        ""ORD-123"",
+        ""ORD-abcdefgh"",
+        ""ORD-1234567890"",
+        """",
+    ],
+)
+def test_process_payment_invalid_order_id(
+    order_id,
+    mock_payment_gateway,
+    mock_fraud_service,
+    mock_logger,
+):
     with pytest.raises(ValueError):
-        compress_and_upload(b"""", mock_compressor, mock_uploader)
+        process_payment(
+            order_id,
+            50.0,
+            payment_gateway=mock_payment_gateway,
+            fraud_service=mock_fraud_service,
+            logger=mock_logger,
+        )
 
-def test_compress_and_upload_compression_failure():
-    mock_compressor = Mock(side_effect=RuntimeError(""Compression failed""))
-    mock_uploader = Mock()
-    with pytest.raises(RuntimeError):
-        compress_and_upload(b""data"", mock_compressor, mock_uploader)",,
-"def monitor_service_health(service_url: str, checker, alerter) -> bool:
-    """"""
-    Monitor service health and send alerts.
-    
-    Args:
-        service_url: URL of service to monitor
-        checker: Health check function
-        alerter: Alert sending function
-    
-    Returns:
-        True if service is healthy
-    
-    Raises:
-        ConnectionError: If unable to reach service
-    
-    # Dependencies: checker(), alerter()
-    """"""","import pytest
-from unittest.mock import Mock
 
-@pytest.mark.parametrize(""service_url,is_healthy"", [
-    (""http://service1.com/health"", True),
-    (""http://service2.com/health"", True),
-])
-def test_monitor_service_health_healthy(service_url, is_healthy):
-    mock_checker = Mock(return_value=is_healthy)
-    mock_alerter = Mock()
-    result = monitor_service_health(service_url, mock_checker, mock_alerter)
-    assert result == True
-    mock_checker.assert_called_once_with(service_url)
-    mock_alerter.assert_not_called()
-
-def test_monitor_service_health_unhealthy():
-    mock_checker = Mock(return_value=False)
-    mock_alerter = Mock()
-    result = monitor_service_health(""http://service.com/health"", mock_checker, mock_alerter)
-    assert result == False
-    mock_alerter.assert_called_once()
-
-def test_monitor_service_health_connection_error():
-    mock_checker = Mock(side_effect=ConnectionError(""Unreachable""))
-    mock_alerter = Mock()
-    with pytest.raises(ConnectionError):
-        monitor_service_health(""http://service.com/health"", mock_checker, mock_alerter)",,
-"def aggregate_metrics(metrics: list[dict], aggregator, storage) -> dict:
-    """"""
-    Aggregate metrics and store results.
-    
-    Args:
-        metrics: List of metric dictionaries
-        aggregator: Metric aggregation function
-        storage: Storage service for results
-    
-    Returns:
-        Aggregated metrics dictionary
-    
-    Raises:
-        ValueError: If metrics list is empty
-        RuntimeError: If aggregation or storage fails
-    
-    # Dependencies: aggregator(), storage.save()
-    """"""","import pytest
-from unittest.mock import Mock
-
-@pytest.mark.parametrize(""metrics,aggregated"", [
-    ([{""count"": 10}, {""count"": 20}], {""total"": 30}),
-    ([{""value"": 5}], {""total"": 5}),
-])
-def test_aggregate_metrics(metrics, aggregated):
-    mock_aggregator = Mock(return_value=aggregated)
-    mock_storage = Mock()
-    result = aggregate_metrics(metrics, mock_aggregator, mock_storage)
-    assert result == aggregated
-    mock_aggregator.assert_called_once_with(metrics)
-    mock_storage.save.assert_called_once_with(aggregated)
-
-def test_aggregate_metrics_empty_list():
-    mock_aggregator = Mock()
-    mock_storage = Mock()
+@pytest.mark.parametrize(""amount"", [0.0, -10.5])
+def test_process_payment_invalid_amount(
+    amount,
+    mock_payment_gateway,
+    mock_fraud_service,
+    mock_logger,
+):
     with pytest.raises(ValueError):
-        aggregate_metrics([], mock_aggregator, mock_storage)
+        process_payment(
+            ""ORD-VALID01"",
+            amount,
+            payment_gateway=mock_payment_gateway,
+            fraud_service=mock_fraud_service,
+            logger=mock_logger,
+        )
 
-def test_aggregate_metrics_aggregation_failure():
-    mock_aggregator = Mock(side_effect=RuntimeError(""Aggregation failed""))
-    mock_storage = Mock()
+
+def test_process_payment_fraud_flagged(
+    mock_payment_gateway,
+    mock_fraud_service,
+    mock_logger,
+):
+    mock_fraud_service.check.return_value = True
+    with pytest.raises(FraudError):
+        process_payment(
+            ""ORD-FAUD123"",
+            75.0,
+            payment_gateway=mock_payment_gateway,
+            fraud_service=mock_fraud_service,
+            logger=mock_logger,
+        )
+    mock_fraud_service.check.assert_called_once()
+    mock_payment_gateway.charge.assert_not_called()
+    mock_logger.error.assert_called()
+
+
+def test_process_payment_fraud_service_error(
+    mock_payment_gateway,
+    mock_fraud_service,
+    mock_logger,
+):
+    mock_fraud_service.check.side_effect = FraudError(""service down"")
+    with pytest.raises(FraudError):
+        process_payment(
+            ""ORD-ERR1234"",
+            120.0,
+            payment_gateway=mock_payment_gateway,
+            fraud_service=mock_fraud_service,
+            logger=mock_logger,
+        )
+    mock_fraud_service.check.assert_called_once()
+    mock_payment_gateway.charge.assert_not_called()
+    mock_logger.error.assert_called()
+
+
+def test_process_payment_gateway_error(
+    mock_payment_gateway,
+    mock_fraud_service,
+    mock_logger,
+):
+    mock_payment_gateway.charge.side_effect = GatewayError(""charge failed"")
+    with pytest.raises(GatewayError):
+        process_payment(
+            ""ORD-ERR5678"",
+            200.0,
+            payment_gateway=mock_payment_gateway,
+            fraud_service=mock_fraud_service,
+            logger=mock_logger,
+        )
+    mock_fraud_service.check.assert_called_once()
+    mock_payment_gateway.charge.assert_called_once()
+    mock_logger.error.assert_called()
+
+
+def test_process_payment_retry_error(
+    mock_payment_gateway,
+    mock_fraud_service,
+    mock_logger,
+):
+    def failing_retry(func, *args, **kwargs):
+        raise RetryError(""all retries exhausted"")
+
+    with pytest.raises(RetryError):
+        process_payment(
+            ""ORD-RETRY01"",
+            150.0,
+            payment_gateway=mock_payment_gateway,
+            fraud_service=mock_fraud_service,
+            logger=mock_logger,
+            retry_policy=failing_retry,
+        )
+    mock_fraud_service.check.assert_called_once()
+    mock_logger.error.assert_called()"
+"def upload_file(
+    file_path: str,
+    storage: StorageService,
+    logger: Logger,
+) -> str:
+    """"""Uploads a file to a remote storage service.
+
+    Args:
+        file_path: Local filesystem path to the file to be uploaded. Must be a non‑empty string.
+        storage: Instance of ``StorageService`` exposing ``upload(path: str) -> str`` which returns the URL of the uploaded file.
+        logger: Logger implementing ``info(message: str)`` and ``error(message: str)``.
+
+    Returns:
+        The URL string returned by ``storage.upload``.
+
+    Raises:
+        FileNotFoundError: If ``file_path`` does not exist.
+        UploadError: Propagated if ``storage.upload`` fails.
+
+    Dependencies:
+        - StorageService: method ``upload(path: str) -> str`` may raise ``UploadError``.
+        - Logger: methods ``info`` and ``error``.
+    """"""","import pytest
+from unittest.mock import MagicMock, patch
+
+# Assume the function and UploadError are defined in a module named `file_uploader`
+from file_uploader import upload_file, UploadError
+
+
+@pytest.fixture
+def mock_storage():
+    return MagicMock()
+
+
+@pytest.fixture
+def mock_logger():
+    return MagicMock()
+
+
+def test_upload_file_success(mock_storage, mock_logger):
+    file_path = ""/tmp/data.txt""
+    expected_url = ""https://storage.example.com/data.txt""
+    mock_storage.upload.return_value = expected_url
+
+    with patch(""file_uploader.os.path.exists"", return_value=True):
+        result = upload_file(file_path, mock_storage, mock_logger)
+
+    assert result == expected_url
+    mock_storage.upload.assert_called_once_with(file_path)
+    mock_logger.info.assert_called_once()
+    mock_logger.error.assert_not_called()
+
+
+def test_upload_file_not_found(mock_storage, mock_logger):
+    file_path = ""/nonexistent/file.txt""
+
+    with patch(""file_uploader.os.path.exists"", return_value=False):
+        with pytest.raises(FileNotFoundError):
+            upload_file(file_path, mock_storage, mock_logger)
+
+    mock_storage.upload.assert_not_called()
+    mock_logger.error.assert_called_once()
+
+
+def test_upload_file_upload_error(mock_storage, mock_logger):
+    file_path = ""/tmp/data.txt""
+    mock_storage.upload.side_effect = UploadError(""upload failed"")
+
+    with patch(""file_uploader.os.path.exists"", return_value=True):
+        with pytest.raises(UploadError):
+            upload_file(file_path, mock_storage, mock_logger)
+
+    mock_storage.upload.assert_called_once_with(file_path)
+    mock_logger.error.assert_called_once()"
+"class PaymentProcessor:
+    async def charge_payment(
+        self,
+        transaction_id: str,
+        amount: Decimal,
+        payment_gateway: PaymentGateway,
+        logger: Logger,
+        *,
+        retry_policy: RetryPolicy = None,
+        metrics: Optional[MetricsCollector] = None,
+    ) -> bool:
+        """"""Attempts to charge a payment through the configured gateway.
+
+        Args:
+            transaction_id: Unique identifier for the payment attempt.
+            amount: Monetary amount to be charged; must be positive.
+            payment_gateway: Service exposing an async ``charge`` coroutine with the signature
+                ``charge(transaction_id: str, amount: Decimal) -> bool`` where ``True`` indicates
+                a successful charge and ``False`` indicates a declined transaction. May raise
+                ``GatewayError`` on network or protocol failures.
+            logger: Logger instance supporting ``info`` and ``error`` methods for audit trails.
+            retry_policy: Optional policy object that defines ``max_attempts`` (int) and
+                ``backoff`` (callable taking attempt number and returning seconds). If omitted,
+                a default of a single attempt with no backoff is used.
+            metrics: Optional collector used to record ``payment_success`` and ``payment_failure``
+                counters via ``increment(metric_name: str, tags: dict)``. If not supplied,
+                metric calls are ignored.
+
+        Returns:
+            ``True`` if the payment was successfully captured, otherwise ``False``.
+
+        Raises:
+            ValueError: If ``amount`` is less than or equal to zero or ``transaction_id`` is empty.
+            PaymentDeclinedError: When the gateway returns ``False`` indicating the card was declined.
+            GatewayError: Propagated if the underlying payment gateway raises an exception.
+            RetryLimitExceededError: If all retry attempts fail due to transient ``GatewayError``s.
+
+        Dependencies:
+            - PaymentGateway: async ``charge`` method as described above.
+            - Logger: provides ``info(message: str)`` and ``error(message: str)``.
+            - RetryPolicy (optional): defines ``max_attempts`` and ``backoff(attempt)``.
+            - MetricsCollector (optional): ``increment(metric_name: str, tags: dict)``.
+        """"""
+        ...
+
+# Dependency details
+# - PaymentGateway: async method ``charge(transaction_id: str, amount: Decimal) -> bool``; may raise ``GatewayError``.
+# - Logger: methods ``info(message: str)`` and ``error(message: str)``.
+# - RetryPolicy: attributes ``max_attempts: int`` and method ``backoff(attempt: int) -> float``.
+# - MetricsCollector (optional): method ``increment(metric_name: str, tags: dict)``.","import pytest
+from unittest.mock import AsyncMock, MagicMock
+from decimal import Decimal
+
+from payment_module import (
+    PaymentProcessor,
+    PaymentDeclinedError,
+    GatewayError,
+    RetryLimitExceededError,
+)
+
+
+@pytest.fixture
+def processor():
+    return PaymentProcessor()
+
+
+@pytest.fixture
+def logger():
+    return MagicMock()
+
+
+@pytest.fixture
+def metrics():
+    return MagicMock()
+
+
+@pytest.fixture
+def retry_policy():
+    policy = MagicMock()
+    policy.max_attempts = 3
+    policy.backoff = MagicMock(return_value=0)
+    return policy
+
+
+@pytest.fixture
+def gateway():
+    return MagicMock()
+
+
+@pytest.mark.asyncio
+async def test_charge_payment_success_first_attempt(
+    processor, gateway, logger
+):
+    gateway.charge = AsyncMock(return_value=True)
+
+    result = await processor.charge_payment(
+        transaction_id=""tx123"",
+        amount=Decimal(""100.00""),
+        payment_gateway=gateway,
+        logger=logger,
+    )
+
+    assert result is True
+    gateway.charge.assert_awaited_once_with(""tx123"", Decimal(""100.00""))
+    logger.info.assert_called()
+    logger.error.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_charge_payment_success_with_metrics(
+    processor, gateway, logger, metrics
+):
+    gateway.charge = AsyncMock(return_value=True)
+
+    result = await processor.charge_payment(
+        transaction_id=""tx999"",
+        amount=Decimal(""50.00""),
+        payment_gateway=gateway,
+        logger=logger,
+        metrics=metrics,
+    )
+
+    assert result is True
+    metrics.increment.assert_called_once_with(
+        ""payment_success"", {""transaction_id"": ""tx999""}
+    )
+    logger.info.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_charge_payment_declined_error(
+    processor, gateway, logger
+):
+    gateway.charge = AsyncMock(return_value=False)
+
+    with pytest.raises(PaymentDeclinedError):
+        await processor.charge_payment(
+            transaction_id=""decline_tx"",
+            amount=Decimal(""20.00""),
+            payment_gateway=gateway,
+            logger=logger,
+        )
+
+    gateway.charge.assert_awaited_once()
+    logger.error.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_charge_payment_invalid_amount(
+    processor, gateway, logger
+):
+    with pytest.raises(ValueError):
+        await processor.charge_payment(
+            transaction_id=""tx_invalid"",
+            amount=Decimal(""-5.00""),
+            payment_gateway=gateway,
+            logger=logger,
+        )
+
+    gateway.charge.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_charge_payment_empty_transaction_id(
+    processor, gateway, logger
+):
+    with pytest.raises(ValueError):
+        await processor.charge_payment(
+            transaction_id="""",
+            amount=Decimal(""10.00""),
+            payment_gateway=gateway,
+            logger=logger,
+        )
+
+    gateway.charge.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_charge_payment_retry_success(
+    processor, gateway, logger, retry_policy, metrics
+):
+    gateway.charge = AsyncMock(
+        side_effect=[GatewayError(), GatewayError(), True]
+    )
+    retry_policy.max_attempts = 3
+
+    result = await processor.charge_payment(
+        transaction_id=""retry_tx"",
+        amount=Decimal(""30.00""),
+        payment_gateway=gateway,
+        logger=logger,
+        retry_policy=retry_policy,
+        metrics=metrics,
+    )
+
+    assert result is True
+    assert gateway.charge.await_count == 3
+    retry_policy.backoff.assert_called()
+    logger.info.assert_called()
+    metrics.increment.assert_called_once_with(
+        ""payment_success"", {""transaction_id"": ""retry_tx""}
+    )
+
+
+@pytest.mark.asyncio
+async def test_charge_payment_retry_limit_exceeded(
+    processor, gateway, logger, retry_policy, metrics
+):
+    gateway.charge = AsyncMock(side_effect=GatewayError())
+    retry_policy.max_attempts = 3
+
+    with pytest.raises(RetryLimitExceededError):
+        await processor.charge_payment(
+            transaction_id=""fail_tx"",
+            amount=Decimal(""40.00""),
+            payment_gateway=gateway,
+            logger=logger,
+            retry_policy=retry_policy,
+            metrics=metrics,
+        )
+
+    assert gateway.charge.await_count == 3
+    retry_policy.backoff.assert_called()
+    logger.error.assert_called()
+    metrics.increment.assert_called_once_with(
+        ""payment_failure"", {""transaction_id"": ""fail_tx""}
+    )"
+"def fetch_user_profile(
+    user_id: int,
+    http_client,
+    cache,
+    *,
+    timeout: float = 2.5,
+    logger=None,
+) -> dict:
+    """"""Retrieves a user profile from a remote service, utilizing a cache for speed.
+
+    Args:
+        user_id (int): Identifier of the user whose profile is requested.
+        http_client: Object exposing a ``get(url: str, timeout: float) -> Response`` method.
+            The ``Response`` must provide ``status_code`` and ``json()``.
+        cache: Cache abstraction with ``get(key: str) -> Any`` and ``set(key: str, value: Any, ttl: int)``.
+        timeout (float, optional): Maximum seconds to wait for the HTTP request. Defaults to ``2.5``.
+        logger (optional): Logger with ``debug`` and ``error`` methods for troubleshooting.
+
+    Returns:
+        dict: The user profile data as returned by the remote service.
+
+    Raises:
+        ValueError: If ``user_id`` is non‑positive.
+        ConnectionError: If the HTTP request fails or returns a non‑200 status.
+        json.JSONDecodeError: If the response body cannot be parsed as JSON.
+
+    Dependencies:
+        - http_client (synchronous): Provides ``get`` for HTTP calls.
+        - cache (synchronous): Simple key/value store used to memoize profiles.
+        - logger (optional): Used for logging request attempts and errors.
+        - json (standard library): Used for decoding response payloads.
+    """"""
+    ...","import pytest
+from unittest.mock import MagicMock, Mock, call
+import importlib
+import json
+
+# Dynamically import the module containing `fetch_user_profile`
+module = importlib.import_module(""user_profile"")
+fetch_user_profile = getattr(module, ""fetch_user_profile"")
+
+
+@pytest.fixture
+def http_client():
+    return MagicMock()
+
+
+@pytest.fixture
+def cache():
+    return MagicMock()
+
+
+@pytest.fixture
+def logger():
+    return MagicMock()
+
+
+def test_fetch_user_profile_invalid_user_id(http_client, cache, logger):
+    with pytest.raises(ValueError):
+        fetch_user_profile(0, http_client, cache, logger=logger)
+    http_client.get.assert_not_called()
+    cache.get.assert_not_called()
+    logger.debug.assert_not_called()
+
+
+def test_fetch_user_profile_cache_hit(http_client, cache, logger):
+    user_id = 42
+    cached_profile = {""id"": user_id, ""name"": ""Alice""}
+    cache.get.return_value = cached_profile
+
+    result = fetch_user_profile(user_id, http_client, cache, logger=logger)
+
+    assert result == cached_profile
+    cache.get.assert_called_once_with(f""user_profile:{user_id}"")
+    http_client.get.assert_not_called()
+    logger.debug.assert_not_called()
+
+
+def test_fetch_user_profile_successful_fetch(http_client, cache, logger):
+    user_id = 7
+    cache.get.return_value = None
+
+    response = Mock()
+    response.status_code = 200
+    response.json.return_value = {""id"": user_id, ""name"": ""Bob""}
+    http_client.get.return_value = response
+
+    result = fetch_user_profile(user_id, http_client, cache, timeout=1.0, logger=logger)
+
+    assert result == {""id"": user_id, ""name"": ""Bob""}
+    cache.get.assert_called_once_with(f""user_profile:{user_id}"")
+    http_client.get.assert_called_once_with(f""https://api.example.com/users/{user_id}"", timeout=1.0)
+    cache.set.assert_called_once_with(f""user_profile:{user_id}"", result, ttl=300)
+    logger.debug.assert_called()
+    logger.error.assert_not_called()
+
+
+def test_fetch_user_profile_http_error(http_client, cache, logger):
+    user_id = 99
+    cache.get.return_value = None
+
+    response = Mock()
+    response.status_code = 500
+    response.json.return_value = {}
+    http_client.get.return_value = response
+
+    with pytest.raises(ConnectionError):
+        fetch_user_profile(user_id, http_client, cache, logger=logger)
+
+    cache.get.assert_called_once_with(f""user_profile:{user_id}"")
+    http_client.get.assert_called_once()
+    logger.error.assert_called()
+
+
+def test_fetch_user_profile_json_decode_error(http_client, cache, logger):
+    user_id = 15
+    cache.get.return_value = None
+
+    response = Mock()
+    response.status_code = 200
+    response.json.side_effect = json.JSONDecodeError(""msg"", doc="""", pos=0)
+    http_client.get.return_value = response
+
+    with pytest.raises(json.JSONDecodeError):
+        fetch_user_profile(user_id, http_client, cache, logger=logger)
+
+    cache.get.assert_called_once_with(f""user_profile:{user_id}"")
+    http_client.get.assert_called_once()
+    logger.error.assert_called()"
+"def generate_report(
+    report_id: str,
+    data_fetcher,
+    transformer,
+    exporter,
+    cache=None,
+    logger=None,
+) -> str:
+    """"""Generates a comprehensive analytics report by fetching raw data, applying a series of
+    transformations, caching intermediate results, and exporting the final document.
+
+    Args:
+        report_id: Unique identifier for the report. Must match ``r""^RPT-[0-9]{6}$""``.
+        data_fetcher: Object exposing ``fetch(report_id: str) -> Iterable[dict]`` which may raise ``DataFetchError``.
+        transformer: Callable that accepts a list of raw records and returns a transformed structure.
+            May raise ``TransformationError``.
+        exporter: Service with ``export(report_id: str, data: Any, format: str) -> str`` that returns the file path
+            of the exported report. Supported formats are ``""pdf""``, ``""xlsx""``, and ``""html""``.
+            May raise ``ExportError``.
+        cache (optional): Mapping with ``get(key: str) -> Any`` and ``set(key: str, value: Any) -> None``.
+            Used to store raw data and transformed results to avoid re‑processing. May raise ``CacheError``.
+        logger (optional): ``logging.Logger`` used to log each phase of the report generation pipeline.
+
+    Returns:
+        File system path (string) of the exported report file.
+
+    Raises:
+        ValueError: If ``report_id`` does not conform to the required pattern.
+        DataFetchError: Propagated from ``data_fetcher`` when raw data retrieval fails.
+        TransformationError: Propagated from ``transformer`` when data cannot be transformed.
+        ExportError: Propagated from ``exporter`` when the report cannot be exported.
+        CacheError: Propagated from ``cache`` operations.
+        RuntimeError: If the requested export format is unsupported.
+
+    Dependencies:
+        - data_fetcher: Provides ``fetch`` method for retrieving raw data.
+        - transformer: Callable for data transformation.
+        - exporter: Provides ``export`` method for generating the final report file.
+        - cache (optional): Simple key/value store for caching intermediate results.
+        - logger (optional): ``logging.Logger`` for progress tracking.
+
+    """"""
+
+
+# Dependency details
+# - data_fetcher: ``fetch(report_id: str) -> Iterable[dict]``; may raise ``DataFetchError``.
+# - transformer: ``Callable[[List[dict]], Any]``; may raise ``TransformationError``.
+# - exporter: ``export(report_id: str, data: Any, format: str) -> str``; may raise ``ExportError``; supports ``pdf``, ``xlsx``, ``html``.
+# - cache (optional): Mapping with ``get``/``set`` methods; may raise ``CacheError``.
+# - logger (optional): standard ``logging.Logger`` instance.","import pytest
+from unittest.mock import MagicMock, ANY
+import importlib
+
+module = importlib.import_module(""target_module"")
+generate_report = getattr(module, ""generate_report"")
+DataFetchError = getattr(module, ""DataFetchError"", Exception)
+TransformationError = getattr(module, ""TransformationError"", Exception)
+ExportError = getattr(module, ""ExportError"", Exception)
+CacheError = getattr(module, ""CacheError"", Exception)
+
+
+@pytest.fixture
+def mock_fetcher():
+    return MagicMock()
+
+
+@pytest.fixture
+def mock_transformer():
+    return MagicMock()
+
+
+@pytest.fixture
+def mock_exporter():
+    return MagicMock()
+
+
+@pytest.fixture
+def mock_cache():
+    return MagicMock()
+
+
+@pytest.fixture
+def mock_logger():
+    return MagicMock()
+
+
+def test_generate_report_successful_flow(mock_fetcher, mock_transformer, mock_exporter, mock_cache, mock_logger):
+    report_id = ""RPT-123456""
+    raw_data = [{""id"": 1}, {""id"": 2}]
+    transformed = {""summary"": ""ok""}
+    exported_path = ""/tmp/report.pdf""
+
+    # cache misses
+    mock_cache.get.side_effect = lambda key: None
+    mock_fetcher.fetch.return_value = raw_data
+    mock_transformer.return_value = transformed
+    mock_exporter.export.return_value = exported_path
+
+    result = generate_report(
+        report_id,
+        data_fetcher=mock_fetcher,
+        transformer=mock_transformer,
+        exporter=mock_exporter,
+        cache=mock_cache,
+        logger=mock_logger,
+    )
+
+    assert result == exported_path
+    mock_fetcher.fetch.assert_called_once_with(report_id)
+    mock_transformer.assert_called_once_with(raw_data)
+    mock_exporter.export.assert_called_once_with(report_id, transformed, ANY)
+    # cache should be used for raw and transformed data
+    assert mock_cache.set.call_count >= 2
+    mock_logger.info.assert_called()
+
+
+def test_generate_report_invalid_report_id(mock_fetcher, mock_transformer, mock_exporter, mock_logger):
+    invalid_id = ""INVALID-001""
+    with pytest.raises(ValueError):
+        generate_report(
+            invalid_id,
+            data_fetcher=mock_fetcher,
+            transformer=mock_transformer,
+            exporter=mock_exporter,
+            logger=mock_logger,
+        )
+    mock_logger.error.assert_called()
+
+
+def test_generate_report_data_fetch_error_propagates(mock_fetcher, mock_transformer, mock_exporter, mock_logger):
+    report_id = ""RPT-000001""
+    mock_fetcher.fetch.side_effect = DataFetchError(""fetch failed"")
+    with pytest.raises(DataFetchError):
+        generate_report(
+            report_id,
+            data_fetcher=mock_fetcher,
+            transformer=mock_transformer,
+            exporter=mock_exporter,
+            logger=mock_logger,
+        )
+    mock_logger.error.assert_called()
+
+
+def test_generate_report_transformation_error_propagates(mock_fetcher, mock_transformer, mock_exporter, mock_logger):
+    report_id = ""RPT-000002""
+    mock_fetcher.fetch.return_value = [{""id"": 1}]
+    mock_transformer.side_effect = TransformationError(""bad data"")
+    with pytest.raises(TransformationError):
+        generate_report(
+            report_id,
+            data_fetcher=mock_fetcher,
+            transformer=mock_transformer,
+            exporter=mock_exporter,
+            logger=mock_logger,
+        )
+    mock_logger.error.assert_called()
+
+
+def test_generate_report_export_error_propagates(mock_fetcher, mock_transformer, mock_exporter, mock_logger):
+    report_id = ""RPT-000003""
+    mock_fetcher.fetch.return_value = [{""id"": 1}]
+    mock_transformer.return_value = {""out"": 1}
+    mock_exporter.export.side_effect = ExportError(""export failed"")
+    with pytest.raises(ExportError):
+        generate_report(
+            report_id,
+            data_fetcher=mock_fetcher,
+            transformer=mock_transformer,
+            exporter=mock_exporter,
+            logger=mock_logger,
+        )
+    mock_logger.error.assert_called()
+
+
+def test_generate_report_cache_error_on_get(mock_fetcher, mock_transformer, mock_exporter, mock_cache, mock_logger):
+    report_id = ""RPT-000004""
+    mock_cache.get.side_effect = CacheError(""cache get fail"")
+    with pytest.raises(CacheError):
+        generate_report(
+            report_id,
+            data_fetcher=mock_fetcher,
+            transformer=mock_transformer,
+            exporter=mock_exporter,
+            cache=mock_cache,
+            logger=mock_logger,
+        )
+    mock_logger.error.assert_called()
+
+
+def test_generate_report_cache_error_on_set(mock_fetcher, mock_transformer, mock_exporter, mock_cache, mock_logger):
+    report_id = ""RPT-000005""
+    mock_fetcher.fetch.return_value = [{""id"": 1}]
+    mock_transformer.return_value = {""out"": 1}
+    mock_exporter.export.return_value = ""/tmp/report.pdf""
+    mock_cache.set.side_effect = CacheError(""cache set fail"")
+    with pytest.raises(CacheError):
+        generate_report(
+            report_id,
+            data_fetcher=mock_fetcher,
+            transformer=mock_transformer,
+            exporter=mock_exporter,
+            cache=mock_cache,
+            logger=mock_logger,
+        )
+    mock_logger.error.assert_called()
+
+
+def test_generate_report_unsupported_format_raises_runtime_error(mock_fetcher, mock_transformer, mock_exporter, mock_logger):
+    report_id = ""RPT-000006""
+    mock_fetcher.fetch.return_value = [{""id"": 1}]
+    mock_transformer.return_value = {""out"": 1}
+    mock_exporter.export.side_effect = RuntimeError(""unsupported format"")
     with pytest.raises(RuntimeError):
-        aggregate_metrics([{""count"": 1}], mock_aggregator, mock_storage)",,
+        generate_report(
+            report_id,
+            data_fetcher=mock_fetcher,
+            transformer=mock_transformer,
+            exporter=mock_exporter,
+            logger=mock_logger,
+        )
+    mock_logger.error.assert_called()"
+"async def schedule_email(
+    user_email: str,
+    email_client,
+    template_loader,
+    retry_policy=None,
+) -> bool:
+    """"""Schedules an email to be sent to a user, rendering a template and handling retries.
+
+    Args:
+        user_email: Recipient email address. Must be a valid email format.
+        email_client: Asynchronous client exposing ``send(to: str, subject: str, body: str) -> Awaitable[bool]``.
+            Returns ``True`` if the email was accepted for delivery; may raise ``EmailSendError``.
+        template_loader: Callable ``load(template_name: str) -> str`` that returns the email body template.
+            May raise ``TemplateNotFound``.
+        retry_policy (optional): Object with ``should_retry(exception) -> bool`` determining whether
+            a failed send should be retried. If omitted, no retries are performed.
+
+    Returns:
+        ``True`` if the email was successfully sent (or queued); ``False`` otherwise.
+
+    Raises:
+        ValueError: If ``user_email`` is not a valid email address.
+        TemplateNotFound: Propagated when the requested template cannot be loaded.
+        EmailSendError: Propagated if ``email_client.send`` fails and ``retry_policy`` decides not to retry.
+        RetryExceededError: Raised when retries exceed a predefined limit.
+
+    Dependencies:
+        - email_client: Async ``send`` method for delivering emails; may raise ``EmailSendError``.
+        - template_loader: Callable ``load`` returning template string; may raise ``TemplateNotFound``.
+        - retry_policy (optional): Provides ``should_retry`` to decide on retry attempts.
+    """"""
+    ...","import pytest
+from unittest.mock import AsyncMock, MagicMock, call
+import importlib
+
+module = importlib.import_module(""email_module"")
+schedule_email = getattr(module, ""schedule_email"")
+EmailSendError = getattr(module, ""EmailSendError"", Exception)
+TemplateNotFound = getattr(module, ""TemplateNotFound"", Exception)
+RetryExceededError = getattr(module, ""RetryExceededError"", Exception)
+
+
+@pytest.fixture
+def email_client():
+    client = MagicMock()
+    client.send = AsyncMock()
+    return client
+
+
+@pytest.fixture
+def template_loader():
+    loader = MagicMock()
+    loader.load.return_value = ""Email body""
+    return loader
+
+
+@pytest.fixture
+def retry_policy():
+    policy = MagicMock()
+    policy.should_retry = MagicMock()
+    return policy
+
+
+@pytest.mark.asyncio
+async def test_schedule_email_success(email_client, template_loader):
+    email_client.send.return_value = True
+
+    result = await schedule_email(
+        user_email=""user@example.com"",
+        email_client=email_client,
+        template_loader=template_loader,
+        retry_policy=None,
+    )
+
+    assert result is True
+    template_loader.load.assert_called_once()
+    email_client.send.assert_awaited_once()
+    # ensure send called with correct args (subject may be default, we only check to)
+    email_client.send.assert_awaited_with(
+        ""user@example.com"", ANY, ANY
+    )
+
+
+@pytest.mark.asyncio
+async def test_schedule_email_invalid_email(email_client, template_loader):
+    with pytest.raises(ValueError):
+        await schedule_email(
+            user_email=""invalid-email"",
+            email_client=email_client,
+            template_loader=template_loader,
+            retry_policy=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_schedule_email_template_not_found(email_client, template_loader):
+    template_loader.load.side_effect = TemplateNotFound
+
+    with pytest.raises(TemplateNotFound):
+        await schedule_email(
+            user_email=""user@example.com"",
+            email_client=email_client,
+            template_loader=template_loader,
+            retry_policy=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_schedule_email_send_error_no_retry(email_client, template_loader):
+    email_client.send.side_effect = EmailSendError
+
+    with pytest.raises(EmailSendError):
+        await schedule_email(
+            user_email=""user@example.com"",
+            email_client=email_client,
+            template_loader=template_loader,
+            retry_policy=None,
+        )
+    assert email_client.send.await_count == 1
+    template_loader.load.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_schedule_email_send_error_with_retry_success(email_client, template_loader, retry_policy):
+    # first attempt fails, second succeeds
+    email_client.send.side_effect = [EmailSendError(), True]
+    retry_policy.should_retry.return_value = True
+
+    result = await schedule_email(
+        user_email=""user@example.com"",
+        email_client=email_client,
+        template_loader=template_loader,
+        retry_policy=retry_policy,
+    )
+
+    assert result is True
+    assert email_client.send.await_count == 2
+    retry_policy.should_retry.assert_called_once()
+    template_loader.load.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_schedule_email_retry_exceeded(email_client, template_loader, retry_policy):
+    # always fails, retry_policy always says to retry
+    email_client.send.side_effect = EmailSendError()
+    retry_policy.should_retry.return_value = True
+
+    with pytest.raises(RetryExceededError):
+        await schedule_email(
+            user_email=""user@example.com"",
+            email_client=email_client,
+            template_loader=template_loader,
+            retry_policy=retry_policy,
+        )
+    # ensure multiple attempts were made (at least two)
+    assert email_client.send.await_count >= 2
+    assert retry_policy.should_retry.called
+    template_loader.load.assert_called_once()"
+"class AuthManager:
+    async def login_user(
+        self,
+        username: str,
+        password: str,
+        auth_backend,
+        token_service,
+        *,
+        logger=None,
+    ) -> str:
+        """"""Authenticates a user and returns a JWT token.
+
+        Args:
+            username: The login identifier supplied by the user.
+            password: The plaintext password supplied by the user.
+            auth_backend: Backend exposing an async ``verify_credentials(username: str, password: str) -> bool``
+                method. May raise ``AuthBackendError``.
+            token_service: Service with a ``create_token(user_id: int) -> str`` method that
+                generates a signed JWT. May raise ``TokenCreationError``.
+            logger: Optional ``logging.Logger`` used to log authentication attempts.
+
+        Returns:
+            A JWT token string representing the authenticated session.
+
+        Raises:
+            AuthenticationError: If credentials are invalid.
+            AuthBackendError: Propagated when the backend encounters an unexpected error.
+            TokenCreationError: Propagated if token generation fails.
+
+        Dependencies:
+            - auth_backend: Provides asynchronous ``verify_credentials``.
+            - token_service: Provides ``create_token`` for JWT generation.
+            - logger (optional): ``logging.Logger`` for audit logging.
+        """"""","import pytest
+from unittest.mock import AsyncMock, MagicMock
+
+import importlib
+
+module = importlib.import_module(""auth_manager"")
+AuthManager = getattr(module, ""AuthManager"")
+AuthenticationError = getattr(module, ""AuthenticationError"", Exception)
+AuthBackendError = getattr(module, ""AuthBackendError"", Exception)
+TokenCreationError = getattr(module, ""TokenCreationError"", Exception)
+
+
+@pytest.fixture
+def auth_manager():
+    return AuthManager()
+
+
+@pytest.fixture
+def mock_auth_backend():
+    backend = MagicMock()
+    backend.verify_credentials = AsyncMock()
+    return backend
+
+
+@pytest.fixture
+def mock_token_service():
+    service = MagicMock()
+    service.create_token = MagicMock()
+    return service
+
+
+@pytest.fixture
+def mock_logger():
+    return MagicMock()
+
+
+@pytest.mark.asyncio
+async def test_login_user_success(
+    auth_manager,
+    mock_auth_backend,
+    mock_token_service,
+    mock_logger,
+):
+    username = ""user1""
+    password = ""pass123""
+    expected_token = ""jwt.token.string""
+
+    mock_auth_backend.verify_credentials.return_value = True
+    mock_token_service.create_token.return_value = expected_token
+
+    token = await auth_manager.login_user(
+        username,
+        password,
+        auth_backend=mock_auth_backend,
+        token_service=mock_token_service,
+        logger=mock_logger,
+    )
+
+    assert token == expected_token
+    mock_auth_backend.verify_credentials.assert_awaited_once_with(username, password)
+    mock_token_service.create_token.assert_called_once()
+    mock_logger.info.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_login_user_invalid_credentials(
+    auth_manager,
+    mock_auth_backend,
+    mock_token_service,
+    mock_logger,
+):
+    username = ""user2""
+    password = ""wrong""
+
+    mock_auth_backend.verify_credentials.return_value = False
+
+    with pytest.raises(AuthenticationError):
+        await auth_manager.login_user(
+            username,
+            password,
+            auth_backend=mock_auth_backend,
+            token_service=mock_token_service,
+            logger=mock_logger,
+        )
+
+    mock_auth_backend.verify_credentials.assert_awaited_once_with(username, password)
+    mock_token_service.create_token.assert_not_called()
+    mock_logger.error.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_login_user_auth_backend_error(
+    auth_manager,
+    mock_auth_backend,
+    mock_token_service,
+    mock_logger,
+):
+    username = ""user3""
+    password = ""pass""
+
+    mock_auth_backend.verify_credentials.side_effect = AuthBackendError(""backend failure"")
+
+    with pytest.raises(AuthBackendError):
+        await auth_manager.login_user(
+            username,
+            password,
+            auth_backend=mock_auth_backend,
+            token_service=mock_token_service,
+            logger=mock_logger,
+        )
+
+    mock_auth_backend.verify_credentials.assert_awaited_once_with(username, password)
+    mock_token_service.create_token.assert_not_called()
+    mock_logger.error.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_login_user_token_creation_error(
+    auth_manager,
+    mock_auth_backend,
+    mock_token_service,
+    mock_logger,
+):
+    username = ""user4""
+    password = ""pass""
+
+    mock_auth_backend.verify_credentials.return_value = True
+    mock_token_service.create_token.side_effect = TokenCreationError(""token error"")
+
+    with pytest.raises(TokenCreationError):
+        await auth_manager.login_user(
+            username,
+            password,
+            auth_backend=mock_auth_backend,
+            token_service=mock_token_service,
+            logger=mock_logger,
+        )
+
+    mock_auth_backend.verify_credentials.assert_awaited_once_with(username, password)
+    mock_token_service.create_token.assert_called_once()
+    mock_logger.error.assert_called()"
+"class NotificationService:
+    async def send_push_notification(
+        self,
+        user_id: str,
+        message: str,
+        push_client,
+        *,
+        priority: str = ""normal"",
+        logger=None,
+    ) -> bool:
+        """"""Sends a push notification to a user via an external push service.
+
+        Args:
+            user_id (str): Identifier of the target user.
+            message (str): Text content of the notification.
+            push_client: Asynchronous client exposing ``send(user_id: str, payload: dict) -> bool``
+                coroutine that returns ``True`` on success.
+            priority (str, optional): Delivery priority, one of ``""low""``, ``""normal""``, ``""high""``.
+                Defaults to ``""normal""``.
+            logger (optional): Logger with ``info`` and ``error`` methods for auditing.
+
+        Returns:
+            bool: ``True`` if the notification was successfully sent, ``False`` otherwise.
+
+        Raises:
+            InvalidPriorityError: If ``priority`` is not one of the accepted values.
+            NetworkError: If the underlying ``push_client`` raises an exception during send.
+
+        Dependencies:
+            - metrics (MetricsCollector): Tracks ``notifications_sent`` and ``notifications_failed`` counters.
+            - retry_policy (RetryPolicy): Provides ``should_retry(exception) -> bool`` to decide on retry attempts.
+        """"""
+        ...","import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from notification_module import NotificationService, InvalidPriorityError, NetworkError
+
+
+@pytest.fixture
+def service():
+    return NotificationService()
+
+
+@pytest.fixture
+def push_client():
+    client = MagicMock()
+    client.send = AsyncMock()
+    return client
+
+
+@pytest.fixture
+def logger():
+    return MagicMock()
+
+
+@pytest.mark.asyncio
+async def test_send_push_notification_happy_path(service, push_client, logger):
+    push_client.send.return_value = True
+    with patch(""notification_module.metrics"") as mock_metrics, \
+         patch(""notification_module.retry_policy"") as mock_retry:
+        mock_retry.should_retry.return_value = False
+        result = await service.send_push_notification(
+            user_id=""user123"",
+            message=""Hello"",
+            push_client=push_client,
+            priority=""normal"",
+            logger=logger,
+        )
+        assert result is True
+        push_client.send.assert_awaited_once_with(""user123"", {""message"": ""Hello"", ""priority"": ""normal""})
+        mock_metrics.increment.assert_called_once_with(""notifications_sent"")
+        logger.info.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_send_push_notification_invalid_priority(service, push_client, logger):
+    with pytest.raises(InvalidPriorityError):
+        await service.send_push_notification(
+            user_id=""user123"",
+            message=""Hello"",
+            push_client=push_client,
+            priority=""urgent"",
+            logger=logger,
+        )
+
+
+@pytest.mark.asyncio
+async def test_send_push_notification_network_error_no_retry(service, push_client, logger):
+    push_client.send.side_effect = Exception(""network failure"")
+    with patch(""notification_module.metrics"") as mock_metrics, \
+         patch(""notification_module.retry_policy"") as mock_retry:
+        mock_retry.should_retry.return_value = False
+        with pytest.raises(NetworkError):
+            await service.send_push_notification(
+                user_id=""user123"",
+                message=""Hello"",
+                push_client=push_client,
+                priority=""high"",
+                logger=logger,
+            )
+        assert push_client.send.await_count == 1
+        mock_metrics.increment.assert_called_once_with(""notifications_failed"")
+        logger.error.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_send_push_notification_retry_success(service, push_client, logger):
+    # First attempt raises, second succeeds
+    push_client.send.side_effect = [Exception(""temp failure""), True]
+    with patch(""notification_module.metrics"") as mock_metrics, \
+         patch(""notification_module.retry_policy"") as mock_retry:
+        mock_retry.should_retry.return_value = True
+        result = await service.send_push_notification(
+            user_id=""user123"",
+            message=""Retry test"",
+            push_client=push_client,
+            priority=""low"",
+            logger=logger,
+        )
+        assert result is True
+        assert push_client.send.await_count == 2
+        mock_metrics.increment.assert_called_once_with(""notifications_sent"")
+        logger.info.assert_called()
+        logger.error.assert_not_called()"
+"async def fetch_user_profile(
+    user_id: str,
+    api_client,
+    cache_client=None,
+    logger=None,
+) -> dict:
+    """"""Retrieves a user's profile information, optionally using a cache.
+
+    Args:
+        user_id: Identifier of the user whose profile is requested. Must be a non‑empty string.
+        api_client: Service exposing ``get_user(user_id: str) -> dict`` that contacts a remote user service.
+            May raise ``ApiError`` for network or HTTP failures.
+        cache_client: Optional cache abstraction with ``get(key: str) -> dict`` and
+            ``set(key: str, value: dict, ttl: int)`` methods. ``get`` returns ``None`` if the key is absent.
+            May raise ``CacheError``.
+        logger: Optional ``logging.Logger`` used to record cache hits, misses, and errors.
+
+    Returns:
+        A dictionary containing the user's profile data as returned by ``api_client``.
+
+    Raises:
+        ValueError: If ``user_id`` is empty.
+        ApiError: Propagated from ``api_client`` when the remote request fails.
+        CacheError: Propagated from ``cache_client`` if cache operations fail.
+
+    Dependencies:
+        - api_client: Provides ``get_user`` for fetching profile data.
+        - cache_client (optional): Provides ``get`` and ``set`` for caching results.
+        - logger (optional): ``logging.Logger`` for diagnostic messages.
+    """"""
+    ...
+
+# Dependency specifications
+# - api_client: ``get_user(user_id: str) -> dict``; may raise ``ApiError``.
+# - cache_client (optional): ``get(key: str) -> dict`` and ``set(key: str, value: dict, ttl: int)``; may raise ``CacheError``.
+# - logger (optional): ``logging.Logger`` instance.","import pytest
+from unittest.mock import AsyncMock, MagicMock, ANY, patch
+
+# Assume the implementation resides in `user_module`
+from user_module import fetch_user_profile, ApiError, CacheError
+
+
+@pytest.fixture
+def mock_api_client():
+    client = MagicMock()
+    client.get_user = AsyncMock()
+    return client
+
+
+@pytest.fixture
+def mock_cache_client():
+    cache = MagicMock()
+    cache.get = AsyncMock()
+    cache.set = AsyncMock()
+    return cache
+
+
+@pytest.fixture
+def mock_logger():
+    return MagicMock()
+
+
+@pytest.mark.asyncio
+async def test_fetch_user_profile_cache_miss(mock_api_client, mock_cache_client, mock_logger):
+    user_id = ""user123""
+    cached_result = None
+    api_result = {""id"": user_id, ""name"": ""Alice""}
+
+    mock_cache_client.get.return_value = cached_result
+    mock_api_client.get_user.return_value = api_result
+
+    result = await fetch_user_profile(user_id, mock_api_client, mock_cache_client, mock_logger)
+
+    assert result == api_result
+    mock_cache_client.get.assert_awaited_once_with(user_id)
+    mock_api_client.get_user.assert_awaited_once_with(user_id)
+    mock_cache_client.set.assert_awaited_once_with(user_id, api_result, ttl=ANY)
+    mock_logger.info.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_fetch_user_profile_cache_hit(mock_api_client, mock_cache_client, mock_logger):
+    user_id = ""user456""
+    cached_profile = {""id"": user_id, ""name"": ""Bob""}
+
+    mock_cache_client.get.return_value = cached_profile
+
+    result = await fetch_user_profile(user_id, mock_api_client, mock_cache_client, mock_logger)
+
+    assert result == cached_profile
+    mock_cache_client.get.assert_awaited_once_with(user_id)
+    mock_api_client.get_user.assert_not_called()
+    mock_cache_client.set.assert_not_called()
+    mock_logger.info.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_fetch_user_profile_empty_user_id(mock_api_client, mock_cache_client, mock_logger):
+    with pytest.raises(ValueError):
+        await fetch_user_profile("""", mock_api_client, mock_cache_client, mock_logger)
+
+
+@pytest.mark.asyncio
+async def test_fetch_user_profile_api_error_propagates(mock_api_client, mock_cache_client, mock_logger):
+    user_id = ""user789""
+    mock_cache_client.get.return_value = None
+    mock_api_client.get_user.side_effect = ApiError(""network failure"")
+
+    with pytest.raises(ApiError):
+        await fetch_user_profile(user_id, mock_api_client, mock_cache_client, mock_logger)
+
+    mock_cache_client.get.assert_awaited_once_with(user_id)
+    mock_api_client.get_user.assert_awaited_once_with(user_id)
+    mock_logger.error.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_fetch_user_profile_cache_get_error_propagates(mock_api_client, mock_cache_client, mock_logger):
+    user_id = ""user101""
+    mock_cache_client.get.side_effect = CacheError(""cache failure"")
+
+    with pytest.raises(CacheError):
+        await fetch_user_profile(user_id, mock_api_client, mock_cache_client, mock_logger)
+
+    mock_cache_client.get.assert_awaited_once_with(user_id)
+    mock_logger.error.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_fetch_user_profile_cache_set_error_propagates(mock_api_client, mock_cache_client, mock_logger):
+    user_id = ""user202""
+    api_result = {""id"": user_id, ""name"": ""Charlie""}
+
+    mock_cache_client.get.return_value = None
+    mock_api_client.get_user.return_value = api_result
+    mock_cache_client.set.side_effect = CacheError(""set failure"")
+
+    with pytest.raises(CacheError):
+        await fetch_user_profile(user_id, mock_api_client, mock_cache_client, mock_logger)
+
+    mock_cache_client.get.assert_awaited_once_with(user_id)
+    mock_api_client.get_user.assert_awaited_once_with(user_id)
+    mock_cache_client.set.assert_awaited_once_with(user_id, api_result, ttl=ANY)
+    mock_logger.error.assert_called()"
+"class ReportGenerator:
+    def generate_sales_report(
+        self,
+        start_date: datetime.date,
+        end_date: datetime.date,
+        db_connection,
+        pdf_renderer,
+        config,
+        *,
+        include_summary: bool = True,
+    ) -> bytes:
+        """"""Creates a PDF sales report for a given date range.
+
+        Args:
+            start_date: Start of the reporting period (inclusive).
+            end_date: End of the reporting period (inclusive); must be on or after ``start_date``.
+            db_connection: Object with method ``query(sql: str, params: Tuple) -> List[Mapping]`` used to fetch sales data.
+            pdf_renderer: Service with method ``render(template_name: str, context: dict) -> bytes`` that returns a PDF document.
+            config: Configuration object providing ``REPORT_TEMPLATE`` (str) and ``MAX_RECORDS`` (int).
+            include_summary: Whether to append a summary page to the PDF.
+
+        Returns:
+            The generated PDF as a ``bytes`` object.
+
+        Raises:
+            ValueError: If ``end_date`` is before ``start_date`` or if the query returns more than ``config.MAX_RECORDS`` rows.
+            DatabaseError: Propagated if ``db_connection.query`` fails.
+            RenderError: Propagated if ``pdf_renderer.render`` fails.
+            ConfigError: If required configuration values are missing.
+
+        Dependencies:
+            - db_connection: ``query(sql: str, params: Tuple) -> List[Mapping]``.
+            - pdf_renderer: ``render(template_name: str, context: dict) -> bytes``.
+            - config: attributes ``REPORT_TEMPLATE`` and ``MAX_RECORDS``.
+        """"""","import pytest
+from unittest.mock import MagicMock, ANY
+
+import datetime
+
+from report_generator import ReportGenerator, DatabaseError, RenderError, ConfigError
+
+
+def test_generate_sales_report_happy_path():
+    start = datetime.date(2023, 1, 1)
+    end = datetime.date(2023, 1, 31)
+
+    mock_db = MagicMock()
+    mock_db.query.return_value = [{""id"": 1, ""amount"": 100.0}, {""id"": 2, ""amount"": 200.0}]
+
+    mock_renderer = MagicMock()
+    pdf_bytes = b""%PDF-1.4 mock""
+    mock_renderer.render.return_value = pdf_bytes
+
+    mock_config = MagicMock()
+    mock_config.REPORT_TEMPLATE = ""sales_report.html""
+    mock_config.MAX_RECORDS = 10
+
+    generator = ReportGenerator()
+    result = generator.generate_sales_report(start, end, mock_db, mock_renderer, mock_config)
+
+    assert result == pdf_bytes
+    mock_db.query.assert_called_once()
+    args, kwargs = mock_db.query.call_args
+    assert isinstance(args[0], str)
+    assert args[1] == (start, end)
+    mock_renderer.render.assert_called_once_with(mock_config.REPORT_TEMPLATE, ANY)
+
+
+def test_generate_sales_report_invalid_date_range():
+    start = datetime.date(2023, 2, 1)
+    end = datetime.date(2023, 1, 31)
+
+    mock_db = MagicMock()
+    mock_renderer = MagicMock()
+    mock_config = MagicMock()
+    mock_config.REPORT_TEMPLATE = ""tpl""
+    mock_config.MAX_RECORDS = 5
+
+    generator = ReportGenerator()
+    with pytest.raises(ValueError):
+        generator.generate_sales_report(start, end, mock_db, mock_renderer, mock_config)
+
+
+def test_generate_sales_report_exceeds_max_records():
+    start = datetime.date(2023, 1, 1)
+    end = datetime.date(2023, 1, 31)
+
+    mock_db = MagicMock()
+    mock_db.query.return_value = [ {""id"": i} for i in range(6) ]
+
+    mock_renderer = MagicMock()
+    mock_config = MagicMock()
+    mock_config.REPORT_TEMPLATE = ""tpl""
+    mock_config.MAX_RECORDS = 5
+
+    generator = ReportGenerator()
+    with pytest.raises(ValueError):
+        generator.generate_sales_report(start, end, mock_db, mock_renderer, mock_config)
+
+
+def test_generate_sales_report_database_error():
+    start = datetime.date(2023, 1, 1)
+    end = datetime.date(2023, 1, 31)
+
+    mock_db = MagicMock()
+    mock_db.query.side_effect = DatabaseError(""db fail"")
+    mock_renderer = MagicMock()
+    mock_config = MagicMock()
+    mock_config.REPORT_TEMPLATE = ""tpl""
+    mock_config.MAX_RECORDS = 10
+
+    generator = ReportGenerator()
+    with pytest.raises(DatabaseError):
+        generator.generate_sales_report(start, end, mock_db, mock_renderer, mock_config)
+
+
+def test_generate_sales_report_render_error():
+    start = datetime.date(2023, 1, 1)
+    end = datetime.date(2023, 1, 31)
+
+    mock_db = MagicMock()
+    mock_db.query.return_value = [{""id"": 1}]
+    mock_renderer = MagicMock()
+    mock_renderer.render.side_effect = RenderError(""render fail"")
+    mock_config = MagicMock()
+    mock_config.REPORT_TEMPLATE = ""tpl""
+    mock_config.MAX_RECORDS = 10
+
+    generator = ReportGenerator()
+    with pytest.raises(RenderError):
+        generator.generate_sales_report(start, end, mock_db, mock_renderer, mock_config)
+
+
+def test_generate_sales_report_missing_config():
+    start = datetime.date(2023, 1, 1)
+    end = datetime.date(2023, 1, 31)
+
+    mock_db = MagicMock()
+    mock_db.query.return_value = [{""id"": 1}]
+    mock_renderer = MagicMock()
+    mock_renderer.render.return_value = b""bytes""
+
+    mock_config = MagicMock()
+    # Deliberately omit REPORT_TEMPLATE
+    del mock_config.REPORT_TEMPLATE
+    mock_config.MAX_RECORDS = 10
+
+    generator = ReportGenerator()
+    with pytest.raises(ConfigError):
+        generator.generate_sales_report(start, end, mock_db, mock_renderer, mock_config)"
+"async def send_email(
+    recipient: str,
+    subject: str,
+    body: str,
+    smtp_client,
+    logger=None,
+) -> bool:
+    """"""Sends an email via the provided SMTP client.
+
+    Args:
+        recipient (str): Destination email address. Must be a valid RFC‑5322 address.
+        subject (str): Subject line of the email.
+        body (str): Plain‑text body of the email.
+        smtp_client: Object exposing ``send_mail(to: str, subject: str, body: str) -> None``.
+            May raise ``SmtpError`` on failure.
+        logger (optional): Logger with ``info`` and ``error`` methods for audit logging.
+
+    Returns:
+        bool: ``True`` if the email was sent successfully, ``False`` otherwise.
+
+    Raises:
+        ValueError: If ``recipient`` is empty or does not contain an ``@`` symbol.
+        SmtpError: Propagated if ``smtp_client.send_mail`` fails.
+
+    Dependencies:
+        - smtp_client (asynchronous): Provides ``send_mail`` for transmitting the message.
+        - logger (optional): Used for logging send attempts and errors.
+    """"""
+    ...","import pytest
+from unittest.mock import AsyncMock, MagicMock, call
+import importlib
+
+module = importlib.import_module(""email_module"")
+send_email = getattr(module, ""send_email"")
+SmtpError = getattr(module, ""SmtpError"", Exception)
+
+
+@pytest.fixture
+def smtp_client():
+    client = AsyncMock()
+    client.send_mail.return_value = None
+    return client
+
+
+@pytest.fixture
+def logger():
+    return MagicMock()
+
+
+@pytest.mark.asyncio
+async def test_send_email_success(smtp_client, logger):
+    result = await send_email(
+        recipient=""user@example.com"",
+        subject=""Test"",
+        body=""Hello"",
+        smtp_client=smtp_client,
+        logger=logger,
+    )
+    assert result is True
+    smtp_client.send_mail.assert_awaited_once_with(""user@example.com"", ""Test"", ""Hello"")
+    logger.info.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_send_email_invalid_recipient_missing_at(smtp_client, logger):
+    with pytest.raises(ValueError):
+        await send_email(
+            recipient=""invalid_email"",
+            subject=""Test"",
+            body=""Hello"",
+            smtp_client=smtp_client,
+            logger=logger,
+        )
+    smtp_client.send_mail.assert_not_awaited()
+    logger.error.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_send_email_invalid_recipient_empty(smtp_client, logger):
+    with pytest.raises(ValueError):
+        await send_email(
+            recipient="""",
+            subject=""Test"",
+            body=""Hello"",
+            smtp_client=smtp_client,
+            logger=logger,
+        )
+    smtp_client.send_mail.assert_not_awaited()
+    logger.error.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_send_email_smtp_error_propagates(smtp_client, logger):
+    smtp_client.send_mail.side_effect = SmtpError(""failed"")
+    with pytest.raises(SmtpError):
+        await send_email(
+            recipient=""user@example.com"",
+            subject=""Test"",
+            body=""Hello"",
+            smtp_client=smtp_client,
+            logger=logger,
+        )
+    smtp_client.send_mail.assert_awaited_once_with(""user@example.com"", ""Test"", ""Hello"")
+    logger.error.assert_called()"
+"class DataCache:
+    def get_or_fetch(
+        self,
+        key: str,
+        fetcher: Callable[[], Any],
+        ttl: int,
+        redis_client: RedisClient,
+    ) -> Any:
+        """"""Retrieves a value from cache or computes it using ``fetcher`` and stores it.
+
+        Args:
+            key: Cache key to look up.
+            fetcher: Callable with no arguments that returns the value to cache if the key is missing.
+            ttl: Time‑to‑live for the cached value in seconds; must be non‑negative.
+            redis_client: Instance of ``RedisClient`` implementing ``get(key) -> Any`` and ``set(key, value, ttl)``.
+                ``get`` returns ``None`` when the key is absent.
+
+        Returns:
+            The cached value if present; otherwise the value returned by ``fetcher`` after storing it.
+
+        Raises:
+            ValueError: If ``ttl`` is negative.
+            CacheError: Propagated if ``redis_client`` operations raise an exception.
+            FetchError: Propagated if ``fetcher`` raises an exception.
+
+        Dependencies:
+            - RedisClient: ``get`` and ``set`` methods; may raise ``CacheError``.
+            - fetcher: callable that may raise ``FetchError``.
+        """"""
+        ...
+
+# Dependency specifications
+# - RedisClient: ``get(key) -> Any`` and ``set(key, value, ttl)``; may raise ``CacheError``.
+# - fetcher: Callable[[], Any]; may raise ``FetchError``.","import pytest
+from unittest.mock import MagicMock, call
+import importlib
+
+module = importlib.import_module(""data_cache_module"")
+DataCache = getattr(module, ""DataCache"")
+CacheError = getattr(module, ""CacheError"", Exception)
+FetchError = getattr(module, ""FetchError"", Exception)
+
+
+@pytest.fixture
+def cache():
+    return DataCache()
+
+
+@pytest.fixture
+def redis_client():
+    return MagicMock()
+
+
+def test_get_or_fetch_returns_cached_value(cache, redis_client):
+    key = ""existing_key""
+    cached_value = {""data"": 123}
+    redis_client.get.return_value = cached_value
+    fetcher = MagicMock()
+
+    result = cache.get_or_fetch(key, fetcher, ttl=60, redis_client=redis_client)
+
+    assert result is cached_value
+    redis_client.get.assert_called_once_with(key)
+    fetcher.assert_not_called()
+    redis_client.set.assert_not_called()
+
+
+def test_get_or_fetch_fetches_and_caches_when_missing(cache, redis_client):
+    key = ""missing_key""
+    redis_client.get.return_value = None
+    fetched_value = [1, 2, 3]
+    fetcher = MagicMock(return_value=fetched_value)
+
+    result = cache.get_or_fetch(key, fetcher, ttl=120, redis_client=redis_client)
+
+    assert result is fetched_value
+    redis_client.get.assert_called_once_with(key)
+    fetcher.assert_called_once()
+    redis_client.set.assert_called_once_with(key, fetched_value, ttl=120)
+
+
+def test_get_or_fetch_negative_ttl_raises_value_error(cache, redis_client):
+    key = ""any_key""
+    fetcher = MagicMock(return_value=""value"")
+
+    with pytest.raises(ValueError):
+        cache.get_or_fetch(key, fetcher, ttl=-10, redis_client=redis_client)
+
+    redis_client.get.assert_not_called()
+    fetcher.assert_not_called()
+    redis_client.set.assert_not_called()
+
+
+def test_get_or_fetch_redis_get_raises_cache_error(cache, redis_client):
+    key = ""error_key""
+    redis_client.get.side_effect = CacheError(""get failure"")
+    fetcher = MagicMock()
+
+    with pytest.raises(CacheError):
+        cache.get_or_fetch(key, fetcher, ttl=30, redis_client=redis_client)
+
+    redis_client.get.assert_called_once_with(key)
+    fetcher.assert_not_called()
+    redis_client.set.assert_not_called()
+
+
+def test_get_or_fetch_redis_set_raises_cache_error(cache, redis_client):
+    key = ""set_error_key""
+    redis_client.get.return_value = None
+    fetched_value = ""new_value""
+    fetcher = MagicMock(return_value=fetched_value)
+    redis_client.set.side_effect = CacheError(""set failure"")
+
+    with pytest.raises(CacheError):
+        cache.get_or_fetch(key, fetcher, ttl=45, redis_client=redis_client)
+
+    redis_client.get.assert_called_once_with(key)
+    fetcher.assert_called_once()
+    redis_client.set.assert_called_once_with(key, fetched_value, ttl=45)
+
+
+def test_get_or_fetch_fetcher_raises_fetch_error(cache, redis_client):
+    key = ""fetch_error_key""
+    redis_client.get.return_value = None
+    fetcher = MagicMock(side_effect=FetchError(""fetch failure""))
+
+    with pytest.raises(FetchError):
+        cache.get_or_fetch(key, fetcher, ttl=15, redis_client=redis_client)
+
+    redis_client.get.assert_called_once_with(key)
+    fetcher.assert_called_once()
+    redis_client.set.assert_not_called()"
+"def calculate_discount(price, discount_percent):
+    """"""Calculates the final price after applying a discount.
+
+    Args:
+        price (float): The original price of the item.
+        discount_percent (float): Discount percentage to apply (0-100).
+
+    Returns:
+        float: The price after discount.
+
+    Raises:
+        ValueError: If price is negative or discount_percent is out of range.
+
+    Dependencies:
+        - config: a module providing a DEFAULT_DISCOUNT (float) used when discount_percent is None.
+    """"""","import pytest
+from unittest.mock import patch
+
+from discount_module import calculate_discount
+
+
+def test_calculate_discount_happy_path():
+    assert calculate_discount(100.0, 10.0) == 90.0
+    assert calculate_discount(50.0, 0.0) == 50.0
+    assert calculate_discount(80.0, 100.0) == 0.0
+
+
+def test_calculate_discount_uses_default_when_none():
+    with patch(""discount_module.config.DEFAULT_DISCOUNT"", 5.0) as mock_default:
+        result = calculate_discount(200.0, None)
+        assert result == 190.0
+        mock_default.__class__.assert_called()
+
+
+@pytest.mark.parametrize(
+    ""price,discount_percent"",
+    [
+        (-10.0, 10.0),
+        (10.0, -5.0),
+        (10.0, 150.0),
+    ],
+)
+def test_calculate_discount_invalid_inputs(price, discount_percent):
+    with pytest.raises(ValueError):
+        calculate_discount(price, discount_percent)"
+"class AuthService:
+    async def verify_user_token(self, token: str, required_scopes: Set[str]) -> Dict[str, Any]:
+        """"""Verify a JWT token against the authentication server and enforce scope checks.
+
+        Args:
+            token: The JWT token provided by the client. Must be a non‑empty string.
+            required_scopes: A set of scopes that must be present in the token's claims.
+                The set may be empty, in which case only signature and expiration checks are performed.
+
+        Returns:
+            A dictionary containing user information extracted from the token, including:
+                - ``user_id`` (str): the unique identifier of the user.
+                - ``email`` (str): the user's verified email address.
+                - ``scopes`` (Set[str]): the full set of scopes associated with the token.
+
+            The dictionary is guaranteed to contain all keys listed above.
+
+        Raises:
+            InvalidTokenError: If the token's signature cannot be validated against the JWKS fetched from the auth server,
+                or if the token is malformed.
+            ExpiredTokenError: If the token's ``exp`` claim indicates it is expired at verification time.
+            PermissionError: If the token's ``scopes`` claim does not include all entries from ``required_scopes``.
+            ServiceUnavailableError: If the JWKS endpoint cannot be contacted or returns an unexpected response.
+
+        Dependencies:
+            - http_client (aiohttp.ClientSession): used to fetch the JSON Web Key Set (JWKS) from ``settings.AUTH_SERVER_JWKS_URL``.
+            - cache (redis.Redis): caches validated token payloads for ``settings.CACHE_TTL`` seconds to avoid repeated JWKS lookups.
+            - settings (AppConfig): provides ``AUTH_SERVER_JWKS_URL``, ``CACHE_TTL``, and ``ALLOWED_ISSUERS``.
+            - logger (structlog.BoundLogger): records verification attempts and reasons for failure.
+        """"""
+        pass","import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+
+# Assume the exceptions and the AuthService class are defined in `auth_module`
+from auth_module import (
+    AuthService,
+    InvalidTokenError,
+    ExpiredTokenError,
+    PermissionError,
+    ServiceUnavailableError,
+)
+
+
+@pytest.fixture
+def mock_settings():
+    settings = MagicMock()
+    settings.AUTH_SERVER_JWKS_URL = ""https://auth.example.com/.well-known/jwks.json""
+    settings.CACHE_TTL = 300
+    settings.ALLOWED_ISSUERS = [""https://auth.example.com/""]
+    return settings
+
+
+@pytest.fixture
+def mock_http_client():
+    client = MagicMock()
+    client.get = AsyncMock()
+    return client
+
+
+@pytest.fixture
+def mock_cache():
+    cache = MagicMock()
+    cache.get = AsyncMock()
+    cache.set = AsyncMock()
+    return cache
+
+
+@pytest.fixture
+def mock_logger():
+    logger = MagicMock()
+    logger.info = MagicMock()
+    logger.error = MagicMock()
+    return logger
+
+
+@pytest.fixture
+def auth_service(mock_http_client, mock_cache, mock_settings, mock_logger):
+    service = AuthService()
+    service.http_client = mock_http_client
+    service.cache = mock_cache
+    service.settings = mock_settings
+    service.logger = mock_logger
+    return service
+
+
+@pytest.mark.asyncio
+async def test_verify_user_token_success(
+    auth_service,
+    mock_http_client,
+    mock_cache,
+    mock_settings,
+    mock_logger,
+):
+    token = ""valid.jwt.token""
+    required_scopes = {""read:data""}
+
+    # Mock cache miss
+    mock_cache.get.return_value = None
+
+    # Mock JWKS fetch
+    jwks_response = MagicMock()
+    jwks_response.json = AsyncMock(return_value={""keys"": [{""kid"": ""test""}]})
+    jwks_response.raise_for_status = MagicMock()
+    mock_http_client.get.return_value = jwks_response
+
+    # Patch internal JWT verification to return a payload
+    payload = {
+        ""user_id"": ""12345"",
+        ""email"": ""user@example.com"",
+        ""scopes"": [""read:data"", ""write:data""],
+        ""iss"": mock_settings.ALLOWED_ISSUERS[0],
+        ""exp"": 9999999999,
+    }
+    with patch.object(
+        auth_service,
+        ""_decode_and_validate"",
+        AsyncMock(return_value=payload),
+    ) as mock_decode:
+        result = await auth_service.verify_user_token(token, required_scopes)
+
+    assert result == {
+        ""user_id"": payload[""user_id""],
+        ""email"": payload[""email""],
+        ""scopes"": set(payload[""scopes""]),
+    }
+
+    mock_cache.get.assert_awaited_once_with(token)
+    mock_http_client.get.assert_awaited_once_with(mock_settings.AUTH_SERVER_JWKS_URL)
+    mock_decode.assert_awaited_once_with(token, {""keys"": [{""kid"": ""test""}]})
+    mock_cache.set.assert_awaited_once_with(token, payload, ex=mock_settings.CACHE_TTL)
+    mock_logger.info.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_verify_user_token_cached(
+    auth_service,
+    mock_http_client,
+    mock_cache,
+    mock_logger,
+):
+    token = ""cached.jwt.token""
+    required_scopes = set()
+
+    cached_payload = {
+        ""user_id"": ""cached_user"",
+        ""email"": ""cached@example.com"",
+        ""scopes"": [""read:data""],
+        ""iss"": ""https://auth.example.com/"",
+        ""exp"": 9999999999,
+    }
+
+    mock_cache.get.return_value = cached_payload
+
+    result = await auth_service.verify_user_token(token, required_scopes)
+
+    assert result == {
+        ""user_id"": cached_payload[""user_id""],
+        ""email"": cached_payload[""email""],
+        ""scopes"": set(cached_payload[""scopes""]),
+    }
+
+    mock_cache.get.assert_awaited_once_with(token)
+    mock_http_client.get.assert_not_called()
+    mock_logger.info.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_verify_user_token_invalid_signature(
+    auth_service,
+    mock_http_client,
+    mock_cache,
+    mock_settings,
+    mock_logger,
+):
+    token = ""invalid.sig.token""
+    required_scopes = set()
+
+    mock_cache.get.return_value = None
+
+    jwks_response = MagicMock()
+    jwks_response.json = AsyncMock(return_value={""keys"": []})
+    jwks_response.raise_for_status = MagicMock()
+    mock_http_client.get.return_value = jwks_response
+
+    with patch.object(
+        auth_service,
+        ""_decode_and_validate"",
+        AsyncMock(side_effect=InvalidTokenError()),
+    ):
+        with pytest.raises(InvalidTokenError):
+            await auth_service.verify_user_token(token, required_scopes)
+
+    mock_logger.error.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_verify_user_token_expired(
+    auth_service,
+    mock_http_client,
+    mock_cache,
+    mock_settings,
+    mock_logger,
+):
+    token = ""expired.jwt.token""
+    required_scopes = set()
+
+    mock_cache.get.return_value = None
+
+    jwks_response = MagicMock()
+    jwks_response.json = AsyncMock(return_value={""keys"": [{""kid"": ""test""}]})
+    jwks_response.raise_for_status = MagicMock()
+    mock_http_client.get.return_value = jwks_response
+
+    with patch.object(
+        auth_service,
+        ""_decode_and_validate"",
+        AsyncMock(side_effect=ExpiredTokenError()),
+    ):
+        with pytest.raises(ExpiredTokenError):
+            await auth_service.verify_user_token(token, required_scopes)
+
+    mock_logger.error.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_verify_user_token_missing_scopes(
+    auth_service,
+    mock_http_client,
+    mock_cache,
+    mock_settings,
+    mock_logger,
+):
+    token = ""good.jwt.token""
+    required_scopes = {""admin""}
+
+    mock_cache.get.return_value = None
+
+    jwks_response = MagicMock()
+    jwks_response.json = AsyncMock(return_value={""keys"": [{""kid"": ""test""}]})
+    jwks_response.raise_for_status = MagicMock()
+    mock_http_client.get.return_value = jwks_response
+
+    payload = {
+        ""user_id"": ""user123"",
+        ""email"": ""user@example.com"",
+        ""scopes"": [""read:data""],
+        ""iss"": mock_settings.ALLOWED_ISSUERS[0],
+        ""exp"": 9999999999,
+    }
+
+    with patch.object(
+        auth_service,
+        ""_decode_and_validate"",
+        AsyncMock(return_value=payload),
+    ):
+        with pytest.raises(PermissionError):
+            await auth_service.verify_user_token(token, required_scopes)
+
+    mock_logger.error.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_verify_user_token_jwks_unavailable(
+    auth_service,
+    mock_http_client,
+    mock_cache,
+    mock_logger,
+):
+    token = ""any.jwt.token""
+    required_scopes = set()
+
+    mock_cache.get.return_value = None
+
+    mock_http_client.get.side_effect = ServiceUnavailableError()
+
+    with pytest.raises(ServiceUnavailableError):
+        await auth_service.verify_user_token(token, required_scopes)
+
+    mock_logger.error.assert_called()"
+"class OrderService:
+    def place_order(
+        self,
+        order_data: dict,
+        inventory_service,
+        payment_service,
+        logger=None,
+    ) -> str:
+        """"""Processes an order by checking inventory and charging payment.
+
+        Args:
+            order_data: Dictionary containing order details, must include ``'product_id'`` and ``'quantity'`` keys.
+            inventory_service: Service exposing ``check_stock(product_id: str, qty: int) -> bool`` and
+                ``reserve_stock(product_id: str, qty: int) -> None``. May raise ``InventoryError``.
+            payment_service: Service with ``charge(amount_cents: int, currency: str) -> dict`` returning a dict with
+                ``'status'`` (``'succeeded'`` or ``'failed'``) and ``'transaction_id'``. May raise ``PaymentError``.
+            logger (optional): Logger with ``info(message: str)`` and ``error(message: str)`` methods for audit logging.
+
+        Returns:
+            The ``transaction_id`` string from ``payment_service`` when the order is successfully placed.
+
+        Raises:
+            ValueError: If ``order_data`` is missing required keys or contains invalid values.
+            InventoryError: Propagated if the requested quantity is unavailable.
+            PaymentError: Propagated if the payment processing fails.
+            OrderProcessingError: Raised when ``payment_service`` returns a ``'failed'`` status.
+
+        Dependencies:
+            - inventory_service: Provides stock checking and reservation methods.
+            - payment_service: Provides payment processing capabilities.
+            - logger (optional): Used for logging order workflow events.
+        """"""
+        ...","import pytest
+from unittest.mock import MagicMock, patch
+
+import importlib
+
+module = importlib.import_module(""order_service"")
+OrderService = getattr(module, ""OrderService"")
+InventoryError = getattr(module, ""InventoryError"", Exception)
+PaymentError = getattr(module, ""PaymentError"", Exception)
+OrderProcessingError = getattr(module, ""OrderProcessingError"", Exception)
+
+
+@pytest.fixture
+def service():
+    return OrderService()
+
+
+@pytest.fixture
+def mock_inventory():
+    return MagicMock()
+
+
+@pytest.fixture
+def mock_payment():
+    return MagicMock()
+
+
+@pytest.fixture
+def mock_logger():
+    return MagicMock()
+
+
+def test_place_order_success(service, mock_inventory, mock_payment, mock_logger):
+    order_data = {""product_id"": ""prod-123"", ""quantity"": 2, ""price_cents"": 500, ""currency"": ""USD""}
+    mock_inventory.check_stock.return_value = True
+    mock_payment.charge.return_value = {""status"": ""succeeded"", ""transaction_id"": ""tx-789""}
+
+    transaction_id = service.place_order(
+        order_data,
+        inventory_service=mock_inventory,
+        payment_service=mock_payment,
+        logger=mock_logger,
+    )
+
+    assert transaction_id == ""tx-789""
+    mock_inventory.check_stock.assert_called_once_with(""prod-123"", 2)
+    mock_inventory.reserve_stock.assert_called_once_with(""prod-123"", 2)
+    mock_payment.charge.assert_called_once_with(500, ""USD"")
+    mock_logger.info.assert_called()
+
+
+def test_place_order_missing_product_id(service, mock_inventory, mock_payment, mock_logger):
+    order_data = {""quantity"": 1, ""price_cents"": 100, ""currency"": ""USD""}
+
+    with pytest.raises(ValueError):
+        service.place_order(
+            order_data,
+            inventory_service=mock_inventory,
+            payment_service=mock_payment,
+            logger=mock_logger,
+        )
+
+    mock_inventory.check_stock.assert_not_called()
+    mock_payment.charge.assert_not_called()
+    mock_logger.error.assert_called()
+
+
+def test_place_order_invalid_quantity(service, mock_inventory, mock_payment, mock_logger):
+    order_data = {""product_id"": ""p1"", ""quantity"": 0, ""price_cents"": 100, ""currency"": ""USD""}
+
+    with pytest.raises(ValueError):
+        service.place_order(
+            order_data,
+            inventory_service=mock_inventory,
+            payment_service=mock_payment,
+            logger=mock_logger,
+        )
+
+    mock_inventory.check_stock.assert_not_called()
+    mock_payment.charge.assert_not_called()
+    mock_logger.error.assert_called()
+
+
+def test_place_order_inventory_error_propagates(service, mock_inventory, mock_payment, mock_logger):
+    order_data = {""product_id"": ""p2"", ""quantity"": 5, ""price_cents"": 250, ""currency"": ""USD""}
+    mock_inventory.check_stock.side_effect = InventoryError(""out of stock"")
+
+    with pytest.raises(InventoryError):
+        service.place_order(
+            order_data,
+            inventory_service=mock_inventory,
+            payment_service=mock_payment,
+            logger=mock_logger,
+        )
+
+    mock_inventory.check_stock.assert_called_once_with(""p2"", 5)
+    mock_inventory.reserve_stock.assert_not_called()
+    mock_payment.charge.assert_not_called()
+    mock_logger.error.assert_called()
+
+
+def test_place_order_payment_error_propagates(service, mock_inventory, mock_payment, mock_logger):
+    order_data = {""product_id"": ""p3"", ""quantity"": 1, ""price_cents"": 300, ""currency"": ""USD""}
+    mock_inventory.check_stock.return_value = True
+    mock_payment.charge.side_effect = PaymentError(""gateway failure"")
+
+    with pytest.raises(PaymentError):
+        service.place_order(
+            order_data,
+            inventory_service=mock_inventory,
+            payment_service=mock_payment,
+            logger=mock_logger,
+        )
+
+    mock_inventory.check_stock.assert_called_once_with(""p3"", 1)
+    mock_inventory.reserve_stock.assert_called_once_with(""p3"", 1)
+    mock_payment.charge.assert_called_once_with(300, ""USD"")
+    mock_logger.error.assert_called()
+
+
+def test_place_order_payment_failed_status(service, mock_inventory, mock_payment, mock_logger):
+    order_data = {""product_id"": ""p4"", ""quantity"": 3, ""price_cents"": 900, ""currency"": ""USD""}
+    mock_inventory.check_stock.return_value = True
+    mock_payment.charge.return_value = {""status"": ""failed"", ""transaction_id"": ""tx-fail""}
+
+    with pytest.raises(OrderProcessingError):
+        service.place_order(
+            order_data,
+            inventory_service=mock_inventory,
+            payment_service=mock_payment,
+            logger=mock_logger,
+        )
+
+    mock_inventory.check_stock.assert_called_once_with(""p4"", 3)
+    mock_inventory.reserve_stock.assert_called_once_with(""p4"", 3)
+    mock_payment.charge.assert_called_once_with(900, ""USD"")
+    mock_logger.error.assert_called()"
+"async def send_email(
+    recipient: str,
+    subject: str,
+    body: str,
+    email_client,
+    logger: Optional[logging.Logger] = None,
+) -> bool:
+    """"""Sends an email using an external email client service.
+
+    Args:
+        recipient: Email address of the recipient. Must be a valid address.
+        subject: Subject line of the email.
+        body: Plain‑text body of the email.
+        email_client: Object exposing ``await send(to: str, subject: str, body: str) -> None``
+            which may raise ``EmailSendError`` on failure.
+        logger (optional): Logger with ``info`` and ``error`` methods for activity logging.
+
+    Returns:
+        ``True`` if the email was sent successfully.
+
+    Raises:
+        ValueError: If ``recipient`` is not a valid email address.
+        EmailSendError: Propagated from ``email_client.send`` when sending fails.
+
+    Dependencies:
+        - email_client: async ``send`` method; may raise ``EmailSendError``.
+        - logger (optional): standard ``logging.Logger`` for logging.
+    """"""
+    ...
+
+# Dependency specifications
+# - email_client: async ``send`` method; may raise ``EmailSendError``.
+# - logger (optional): ``info`` / ``error`` methods.","import pytest
+from unittest.mock import AsyncMock, MagicMock
+import importlib
+import logging
+
+module = importlib.import_module(""email_module"")
+send_email = getattr(module, ""send_email"")
+EmailSendError = getattr(module, ""EmailSendError"", Exception)
+
+
+@pytest.fixture
+def recipient():
+    return ""user@example.com""
+
+
+@pytest.fixture
+def invalid_recipient():
+    return ""invalid-email""
+
+
+@pytest.fixture
+def subject():
+    return ""Test Subject""
+
+
+@pytest.fixture
+def body():
+    return ""Test email body.""
+
+
+@pytest.fixture
+def email_client():
+    client = MagicMock()
+    client.send = AsyncMock()
+    return client
+
+
+@pytest.fixture
+def logger():
+    return MagicMock(spec=logging.Logger)
+
+
+@pytest.mark.asyncio
+async def test_send_email_success(
+    recipient,
+    subject,
+    body,
+    email_client,
+    logger,
+):
+    result = await send_email(
+        recipient=recipient,
+        subject=subject,
+        body=body,
+        email_client=email_client,
+        logger=logger,
+    )
+    assert result is True
+    email_client.send.assert_awaited_once_with(recipient, subject, body)
+    logger.info.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_send_email_without_logger(
+    recipient,
+    subject,
+    body,
+    email_client,
+):
+    result = await send_email(
+        recipient=recipient,
+        subject=subject,
+        body=body,
+        email_client=email_client,
+        logger=None,
+    )
+    assert result is True
+    email_client.send.assert_awaited_once_with(recipient, subject, body)
+
+
+@pytest.mark.asyncio
+async def test_send_email_invalid_recipient(
+    invalid_recipient,
+    subject,
+    body,
+    email_client,
+    logger,
+):
+    with pytest.raises(ValueError):
+        await send_email(
+            recipient=invalid_recipient,
+            subject=subject,
+            body=body,
+            email_client=email_client,
+            logger=logger,
+        )
+    email_client.send.assert_not_called()
+    logger.error.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_send_email_client_error(
+    recipient,
+    subject,
+    body,
+    email_client,
+    logger,
+):
+    email_client.send.side_effect = EmailSendError(""send failure"")
+    with pytest.raises(EmailSendError):
+        await send_email(
+            recipient=recipient,
+            subject=subject,
+            body=body,
+            email_client=email_client,
+            logger=logger,
+        )
+    email_client.send.assert_awaited_once_with(recipient, subject, body)
+    logger.error.assert_called()"
+"def calculate_discount(
+    price_cents: int,
+    user_role: str,
+    discount_service,
+    logger=None,
+) -> int:
+    """"""Calculates the discounted price for a product based on user role.
+
+    Args:
+        price_cents (int): Original price in cents; must be non‑negative.
+        user_role (str): Role of the user (e.g., ``""guest""``, ``""member""``, ``""vip""``).
+        discount_service: Service exposing ``get_discount(role: str) -> float`` which returns a discount factor between 0 and 1.
+        logger (optional): Logger with ``debug`` and ``warning`` methods.
+
+    Returns:
+        int: The final price in cents after applying the discount, rounded down.
+
+    Raises:
+        ValueError: If ``price_cents`` is negative or ``user_role`` is empty.
+        DiscountServiceError: Propagated if ``discount_service.get_discount`` raises an exception.
+        TypeError: If ``discount_service.get_discount`` returns a non‑float.
+
+    Dependencies:
+        - discount_service: Provides ``get_discount`` method; may raise ``DiscountServiceError``.
+        - logger (optional): Used for debugging and warning messages.
+    """"""","import pytest
+from unittest.mock import MagicMock, patch
+
+from discount_module import calculate_discount
+DiscountServiceError = getattr(__import__(""discount_module""), ""DiscountServiceError"", Exception)
+
+
+def test_calculate_discount_happy_path():
+    discount_service = MagicMock()
+    discount_service.get_discount.return_value = 0.15
+    logger = MagicMock()
+
+    result = calculate_discount(2000, ""vip"", discount_service, logger=logger)
+
+    assert result == 1700  # floor(2000 * (1 - 0.15))
+    discount_service.get_discount.assert_called_once_with(""vip"")
+    logger.debug.assert_called()
+
+
+@pytest.mark.parametrize(
+    ""price,role,discount,expected"",
+    [
+        (1000, ""guest"", 0.0, 1000),
+        (500, ""member"", 0.5, 250),
+    ],
+)
+def test_calculate_discount_various(price, role, discount, expected):
+    ds = MagicMock()
+    ds.get_discount.return_value = discount
+    result = calculate_discount(price, role, ds)
+    assert result == expected
+    ds.get_discount.assert_called_once_with(role)
+
+
+def test_calculate_discount_negative_price_raises():
+    ds = MagicMock()
+    with pytest.raises(ValueError):
+        calculate_discount(-10, ""member"", ds)
+
+
+def test_calculate_discount_empty_role_raises():
+    ds = MagicMock()
+    with pytest.raises(ValueError):
+        calculate_discount(100, """", ds)
+
+
+def test_calculate_discount_service_error_propagates():
+    ds = MagicMock()
+    ds.get_discount.side_effect = DiscountServiceError(""service failure"")
+    with pytest.raises(DiscountServiceError):
+        calculate_discount(1000, ""member"", ds)
+
+
+def test_calculate_discount_non_float_return_raises_type_error():
+    ds = MagicMock()
+    ds.get_discount.return_value = ""0.1""
+    with pytest.raises(TypeError):
+        calculate_discount(1000, ""member"", ds)
+
+
+def test_calculate_discount_logger_warning_on_invalid_input():
+    ds = MagicMock()
+    logger = MagicMock()
+    with pytest.raises(ValueError):
+        calculate_discount(-5, ""member"", ds, logger=logger)
+    logger.warning.assert_called()
+```"
+"class AuthService:
+    async def authenticate_user(
+        self,
+        token: str,
+        oauth_client: OAuthClient,
+        cache: Cache,
+        *,
+        required_scopes: Optional[Set[str]] = None,
+    ) -> User:
+        """"""Authenticates a user using an OAuth token.
+
+        Args:
+            token: Bearer token received from the client.
+            oauth_client: Client instance capable of ``validate_token(token)`` which returns
+                a dict with ``user_id`` and ``scopes`` or raises ``InvalidTokenError``.
+            cache: Cache implementation offering ``get(key)`` and ``set(key, value, ttl)``.
+            required_scopes: Optional set of scopes that must be present in the token;
+                if omitted, only basic authentication is performed.
+
+        Returns:
+            ``User`` object populated with the ``user_id`` from the token and any additional
+            profile data fetched lazily via ``User.fetch_profile()``.
+
+        Raises:
+            AuthenticationError: If the token is missing, invalid, expired, or does not contain
+                the required scopes.
+            ServiceUnavailableError: If the OAuth provider cannot be contacted.
+            CacheError: If reading from or writing to the cache fails.
+        """"""
+        ...
+
+# Dependencies
+# - OAuthClient: method ``validate_token(token: str) -> dict``; may raise ``InvalidTokenError``.
+# - Cache: methods ``get(key) -> Any`` and ``set(key, value, ttl: int)``; may raise ``CacheError``.
+# - User: class with constructor ``User(user_id: int)`` and async method ``fetch_profile()``.","import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from auth_module import AuthService, AuthenticationError, ServiceUnavailableError, CacheError, InvalidTokenError
+
+
+@pytest.fixture
+def auth_service():
+    return AuthService()
+
+
+@pytest.fixture
+def token():
+    return ""valid-token""
+
+
+@pytest.fixture
+def user_id():
+    return 42
+
+
+@pytest.fixture
+def token_scopes():
+    return {""read"", ""write""}
+
+
+@pytest.fixture
+def oauth_client(token_scopes, user_id):
+    client = MagicMock()
+    client.validate_token.return_value = {""user_id"": user_id, ""scopes"": token_scopes}
+    return client
+
+
+@pytest.fixture
+def cache():
+    return MagicMock()
+
+
+@pytest.fixture
+def user_mock(user_id):
+    user = MagicMock()
+    user.user_id = user_id
+    user.fetch_profile = AsyncMock()
+    return user
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_happy_path_no_required_scopes(auth_service, token, oauth_client, cache, user_mock):
+    with patch(""auth_module.User"", return_value=user_mock) as user_cls:
+        cache.get.return_value = None
+        result = await auth_service.authenticate_user(token, oauth_client, cache)
+        assert result is user_mock
+        oauth_client.validate_token.assert_called_once_with(token)
+        cache.get.assert_called_once()
+        cache.set.assert_called_once()
+        user_cls.assert_called_once_with(user_mock.user_id)
+        user_mock.fetch_profile.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_happy_path_with_required_scopes(auth_service, token, oauth_client, cache, user_mock):
+    required = {""read""}
+    with patch(""auth_module.User"", return_value=user_mock):
+        cache.get.return_value = None
+        result = await auth_service.authenticate_user(token, oauth_client, cache, required_scopes=required)
+        assert result is user_mock
+        oauth_client.validate_token.assert_called_once_with(token)
+        cache.set.assert_called_once()
+        user_mock.fetch_profile.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_missing_token(auth_service, oauth_client, cache):
+    with pytest.raises(AuthenticationError):
+        await auth_service.authenticate_user("""", oauth_client, cache)
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_invalid_token(auth_service, token, oauth_client, cache):
+    oauth_client.validate_token.side_effect = InvalidTokenError()
+    with pytest.raises(AuthenticationError):
+        await auth_service.authenticate_user(token, oauth_client, cache)
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_missing_required_scopes(auth_service, token, oauth_client, cache):
+    oauth_client.validate_token.return_value = {""user_id"": 1, ""scopes"": {""read""}}
+    with pytest.raises(AuthenticationError):
+        await auth_service.authenticate_user(token, oauth_client, cache, required_scopes={""write""})
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_oauth_service_unavailable(auth_service, token, oauth_client, cache):
+    oauth_client.validate_token.side_effect = ServiceUnavailableError()
+    with pytest.raises(ServiceUnavailableError):
+        await auth_service.authenticate_user(token, oauth_client, cache)
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_cache_error_on_get(auth_service, token, oauth_client, cache):
+    cache.get.side_effect = CacheError()
+    with pytest.raises(CacheError):
+        await auth_service.authenticate_user(token, oauth_client, cache)
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_cache_error_on_set(auth_service, token, oauth_client, cache, user_mock):
+    with patch(""auth_module.User"", return_value=user_mock):
+        cache.get.return_value = None
+        cache.set.side_effect = CacheError()
+        with pytest.raises(CacheError):
+            await auth_service.authenticate_user(token, oauth_client, cache)"
+"def calculate_discount(
+    price: float,
+    user,
+    discount_service,
+    *,
+    logger=None,
+) -> float:
+    """"""Computes the final price after applying applicable discounts.
+
+    Args:
+        price: Original price of the product in USD. Must be non‑negative.
+        user: User object containing at least ``user.id`` and ``user.membership_level``.
+        discount_service: Service exposing ``get_discount(user_id: int, price: float) -> float``
+            which returns a discount amount (not a percentage). May raise ``DiscountError``.
+        logger: Optional ``logging.Logger`` used to record discount calculations.
+
+    Returns:
+        The price after subtracting the discount, never less than zero.
+
+    Raises:
+        ValueError: If ``price`` is negative.
+        DiscountError: Propagated from ``discount_service`` when discount retrieval fails.
+
+    Dependencies:
+        - discount_service: Provides ``get_discount`` method.
+        - logger (optional): ``logging.Logger`` for audit logging.
+    """"""","import pytest
+from unittest.mock import Mock, MagicMock
+
+from discount_module import calculate_discount, DiscountError
+
+
+@pytest.fixture
+def user():
+    u = MagicMock()
+    u.id = 42
+    u.membership_level = ""gold""
+    return u
+
+
+@pytest.fixture
+def discount_service():
+    return Mock()
+
+
+@pytest.fixture
+def logger():
+    return Mock()
+
+
+def test_calculate_discount_happy_path(user, discount_service, logger):
+    discount_service.get_discount.return_value = 20.0
+    result = calculate_discount(
+        price=100.0,
+        user=user,
+        discount_service=discount_service,
+        logger=logger,
+    )
+    assert result == 80.0
+    discount_service.get_discount.assert_called_once_with(user.id, 100.0)
+    logger.info.assert_called()
+
+
+def test_calculate_discount_zero_discount(user, discount_service, logger):
+    discount_service.get_discount.return_value = 0.0
+    result = calculate_discount(
+        price=50.0,
+        user=user,
+        discount_service=discount_service,
+        logger=logger,
+    )
+    assert result == 50.0
+    discount_service.get_discount.assert_called_once_with(user.id, 50.0)
+    logger.info.assert_called()
+
+
+def test_calculate_discount_exceeds_price(user, discount_service, logger):
+    discount_service.get_discount.return_value = 150.0
+    result = calculate_discount(
+        price=100.0,
+        user=user,
+        discount_service=discount_service,
+        logger=logger,
+    )
+    assert result == 0.0
+    discount_service.get_discount.assert_called_once_with(user.id, 100.0)
+    logger.info.assert_called()
+
+
+def test_calculate_discount_negative_price_raises(user, discount_service, logger):
+    discount_service.get_discount.return_value = 10.0
+    with pytest.raises(ValueError):
+        calculate_discount(
+            price=-5.0,
+            user=user,
+            discount_service=discount_service,
+            logger=logger,
+        )
+    discount_service.get_discount.assert_not_called()
+    logger.info.assert_not_called()
+
+
+def test_calculate_discount_service_error_propagates(user, discount_service, logger):
+    discount_service.get_discount.side_effect = DiscountError()
+    with pytest.raises(DiscountError):
+        calculate_discount(
+            price=80.0,
+            user=user,
+            discount_service=discount_service,
+            logger=logger,
+        )
+    discount_service.get_discount.assert_called_once_with(user.id, 80.0)
+    logger.info.assert_not_called()"
+"class PricingEngine:
+    def calculate_total_price(self, items: List[Tuple[str, int]], tax_service, discount_service=None) -> float:
+        """"""Computes the total price for a list of items, applying taxes and optional discounts.
+
+        Args:
+            items: A list of tuples where each tuple contains ``(product_id: str, quantity: int)``.
+            tax_service: Service with method ``get_tax_rate(product_id: str) -> float`` that returns the tax rate as a decimal (e.g., 0.07).
+            discount_service: Optional service with method ``apply_discount(subtotal: float) -> float`` that returns the discounted amount.
+
+        Returns:
+            The final total price (float) after applying taxes to each line item and subtracting any discount.
+
+        Raises:
+            ValueError: If ``items`` is empty or contains non‑positive quantities.
+            ProductNotFoundError: If ``tax_service`` cannot provide a tax rate for a given ``product_id``.
+            DiscountError: Propagated if ``discount_service`` fails during discount calculation.
+
+        Dependencies:
+            - tax_service: Provides ``get_tax_rate`` for tax lookup.
+            - discount_service (optional): Provides ``apply_discount`` for discount calculation.
+            - logger (logging.Logger): Records pricing calculations and any errors.
+        """"""","import pytest
+from unittest.mock import MagicMock, patch
+
+# Assuming the implementation resides in a module named `pricing_module`
+pricing_module = __import__(""pricing_module"")
+PricingEngine = pricing_module.PricingEngine
+ProductNotFoundError = getattr(pricing_module, ""ProductNotFoundError"", Exception)
+DiscountError = getattr(pricing_module, ""DiscountError"", Exception)
+
+
+@pytest.fixture
+def engine():
+    return PricingEngine()
+
+
+@pytest.fixture
+def tax_service():
+    return MagicMock()
+
+
+@pytest.fixture
+def discount_service():
+    return MagicMock()
+
+
+@pytest.fixture
+def logger():
+    return MagicMock()
+
+
+def test_calculate_total_price_happy_path_no_discount(engine, tax_service, logger):
+    items = [(""prod1"", 2), (""prod2"", 3)]
+    tax_service.get_tax_rate.side_effect = lambda pid: {""prod1"": 0.10, ""prod2"": 0.20}[pid]
+
+    with patch.object(pricing_module, ""logger"", logger):
+        total = engine.calculate_total_price(items, tax_service)
+
+    # subtotal = 2 + 3 = 5
+    # tax = 2*0.10 + 3*0.20 = 0.20 + 0.60 = 0.80
+    # expected total = 5 + 0.80 = 5.80
+    assert total == pytest.approx(5.80)
+    assert tax_service.get_tax_rate.call_count == 2
+    logger.info.assert_called()
+
+
+def test_calculate_total_price_happy_path_with_discount(engine, tax_service, discount_service, logger):
+    items = [(""prod1"", 2), (""prod2"", 3)]
+    tax_service.get_tax_rate.side_effect = lambda pid: {""prod1"": 0.10, ""prod2"": 0.20}[pid]
+    discount_service.apply_discount.return_value = 1.0  # discount amount
+
+    with patch.object(pricing_module, ""logger"", logger):
+        total = engine.calculate_total_price(items, tax_service, discount_service)
+
+    # subtotal = 5, tax = 0.80, subtotal+tax = 5.80
+    # final total = 5.80 - 1.0 = 4.80
+    assert total == pytest.approx(4.80)
+    discount_service.apply_discount.assert_called_once_with(pytest.approx(5.80))
+    logger.info.assert_called()
+
+
+def test_calculate_total_price_empty_items_raises(engine, tax_service, logger):
+    with patch.object(pricing_module, ""logger"", logger):
+        with pytest.raises(ValueError):
+            engine.calculate_total_price([], tax_service)
+
+    logger.error.assert_called()
+
+
+@pytest.mark.parametrize(""items"", [
+    [(""prod1"", 0)],
+    [(""prod2"", -3)],
+    [(""p1"", 5), (""p2"", -1)],
+])
+def test_calculate_total_price_non_positive_quantity_raises(engine, tax_service, items, logger):
+    with patch.object(pricing_module, ""logger"", logger):
+        with pytest.raises(ValueError):
+            engine.calculate_total_price(items, tax_service)
+
+    logger.error.assert_called()
+
+
+def test_calculate_total_price_product_not_found(engine, tax_service, logger):
+    items = [(""unknown"", 1)]
+    tax_service.get_tax_rate.side_effect = ProductNotFoundError(""not found"")
+
+    with patch.object(pricing_module, ""logger"", logger):
+        with pytest.raises(ProductNotFoundError):
+            engine.calculate_total_price(items, tax_service)
+
+    tax_service.get_tax_rate.assert_called_once_with(""unknown"")
+    logger.error.assert_called()
+
+
+def test_calculate_total_price_discount_error_propagates(engine, tax_service, discount_service, logger):
+    items = [(""prod1"", 2)]
+    tax_service.get_tax_rate.return_value = 0.05
+    discount_service.apply_discount.side_effect = DiscountError(""discount failure"")
+
+    with patch.object(pricing_module, ""logger"", logger):
+        with pytest.raises(DiscountError):
+            engine.calculate_total_price(items, tax_service, discount_service)
+
+    discount_service.apply_discount.assert_called_once()
+    logger.error.assert_called()"
+"def calculate_total_price(
+    cart_items,
+    tax_service,
+    discount_service=None,
+    logger=None,
+) -> float:
+    """"""Calculates the total price for a shopping cart including tax and optional discount.
+
+    Args:
+        cart_items: Iterable of ``dict`` objects each containing ``price`` (float) and ``quantity`` (int).
+        tax_service: Service with method ``get_tax_rate() -> float`` returning a decimal tax rate (e.g., 0.07).
+        discount_service: Optional service with method ``apply(cart_total: float) -> float`` returning a discounted total.
+        logger: Optional logger with ``debug(message: str)`` method.
+
+    Returns:
+        The final amount as a ``float`` after applying tax and any discount.
+
+    Raises:
+        ValueError: If any item lacks ``price`` or ``quantity`` or has negative values.
+        TaxError: Propagated from ``tax_service.get_tax_rate`` if it fails.
+        DiscountError: Propagated from ``discount_service.apply`` if provided and it fails.
+
+    Dependencies:
+        - tax_service: ``get_tax_rate() -> float``.
+        - discount_service (optional): ``apply(cart_total: float) -> float``.
+        - logger (optional): ``debug(message: str)``.
+    """"""","import pytest
+from unittest.mock import MagicMock, call
+import importlib
+
+module = importlib.import_module(""cart_module"")
+calculate_total_price = module.calculate_total_price
+TaxError = getattr(module, ""TaxError"", Exception)
+DiscountError = getattr(module, ""DiscountError"", Exception)
+
+
+@pytest.fixture
+def tax_service():
+    service = MagicMock()
+    service.get_tax_rate.return_value = 0.10
+    return service
+
+
+@pytest.fixture
+def discount_service():
+    service = MagicMock()
+    service.apply.side_effect = lambda total: total * 0.9  # 10% discount
+    return service
+
+
+@pytest.fixture
+def logger():
+    return MagicMock()
+
+
+def test_calculate_total_price_happy_path_with_discount(tax_service, discount_service, logger):
+    cart_items = [
+        {""price"": 20.0, ""quantity"": 2},
+        {""price"": 5.0, ""quantity"": 1},
+    ]  # subtotal = 45.0
+    result = calculate_total_price(cart_items, tax_service, discount_service, logger)
+
+    # subtotal 45.0, tax 10% => 49.5, discount 10% => 44.55
+    assert result == pytest.approx(44.55)
+    tax_service.get_tax_rate.assert_called_once()
+    discount_service.apply.assert_called_once_with(45.0 * 1.10)
+    logger.debug.assert_has_calls([call(""Subtotal: 45.0""), call(""Tax rate: 0.1""), call(""Total after tax: 49.5""), call(""Discount applied: 44.55"")])
+
+
+def test_calculate_total_price_without_discount(tax_service, logger):
+    cart_items = [{""price"": 10.0, ""quantity"": 3}]  # subtotal = 30.0
+    result = calculate_total_price(cart_items, tax_service, discount_service=None, logger=logger)
+
+    # subtotal 30.0, tax 10% => 33.0
+    assert result == pytest.approx(33.0)
+    tax_service.get_tax_rate.assert_called_once()
+    logger.debug.assert_has_calls([call(""Subtotal: 30.0""), call(""Tax rate: 0.1""), call(""Total after tax: 33.0"")])
+
+
+def test_calculate_total_price_no_logger(tax_service):
+    cart_items = [{""price"": 15.0, ""quantity"": 2}]
+    result = calculate_total_price(cart_items, tax_service)
+
+    assert result == pytest.approx(33.0)  # 30 * 1.1
+    tax_service.get_tax_rate.assert_called_once()
+
+
+def test_calculate_total_price_invalid_item_missing_price(tax_service):
+    cart_items = [{""quantity"": 1}]
+    with pytest.raises(ValueError):
+        calculate_total_price(cart_items, tax_service)
+
+
+def test_calculate_total_price_invalid_item_negative_quantity(tax_service):
+    cart_items = [{""price"": 10.0, ""quantity"": -2}]
+    with pytest.raises(ValueError):
+        calculate_total_price(cart_items, tax_service)
+
+
+def test_calculate_total_price_tax_service_error():
+    tax_service = MagicMock()
+    tax_service.get_tax_rate.side_effect = TaxError(""tax failed"")
+    cart_items = [{""price"": 10.0, ""quantity"": 1}]
+    with pytest.raises(TaxError):
+        calculate_total_price(cart_items, tax_service)
+
+
+def test_calculate_total_price_discount_service_error(tax_service, logger):
+    discount_service = MagicMock()
+    discount_service.apply.side_effect = DiscountError(""discount failed"")
+    cart_items = [{""price"": 20.0, ""quantity"": 1}]
+    with pytest.raises(DiscountError):
+        calculate_total_price(cart_items, tax_service, discount_service, logger)
+    tax_service.get_tax_rate.assert_called_once()
+    discount_service.apply.assert_called_once()"
+"class FileUploader:
+    async def upload_file(
+        self,
+        file_path: str,
+        user_id: str,
+        storage_service,
+        scanner_service,
+        logger,
+        *,
+        chunk_size: int = 5 * 1024 * 1024,
+    ) -> str:
+        """"""Uploads a file to remote storage after scanning for malware.
+
+        Args:
+            file_path: Local path to the file to be uploaded. Must exist and be readable.
+            user_id: Identifier of the user performing the upload.
+            storage_service: Service exposing async ``store(user_id: str, data: bytes) -> str`` which returns a URL.
+            scanner_service: Service with async ``scan(data: bytes) -> bool`` returning ``True`` if clean.
+            logger: Logger with ``info`` and ``error`` methods.
+            chunk_size: Size of each read chunk in bytes; defaults to 5 MiB.
+
+        Returns:
+            The URL (str) of the uploaded file as returned by ``storage_service.store``.
+
+        Raises:
+            FileNotFoundError: If ``file_path`` does not exist.
+            PermissionError: If the file cannot be read.
+            VirusDetectedError: If ``scanner_service.scan`` returns ``False``.
+            StorageError: Propagated if ``storage_service.store`` raises an exception.
+            ValueError: If ``chunk_size`` is not positive.
+
+        Dependencies:
+            - storage_service (async): ``store(user_id: str, data: bytes) -> str``.
+            - scanner_service (async): ``scan(data: bytes) -> bool``.
+            - logger: ``info(message: str)`` and ``error(message: str)``.
+        """"""","import pytest
+from unittest.mock import AsyncMock, MagicMock, patch, ANY, mock_open
+
+import importlib
+
+module = importlib.import_module(""file_uploader_module"")
+FileUploader = getattr(module, ""FileUploader"")
+VirusDetectedError = getattr(module, ""VirusDetectedError"", Exception)
+StorageError = getattr(module, ""StorageError"", Exception)
+
+
+@pytest.fixture
+def uploader():
+    return FileUploader()
+
+
+@pytest.fixture
+def logger():
+    return MagicMock()
+
+
+@pytest.fixture
+def storage_service():
+    svc = AsyncMock()
+    svc.store.return_value = ""https://storage.example.com/file.bin""
+    return svc
+
+
+@pytest.fixture
+def scanner_service():
+    svc = AsyncMock()
+    svc.scan.return_value = True
+    return svc
+
+
+@pytest.mark.asyncio
+async def test_upload_file_success(uploader, storage_service, scanner_service, logger):
+    file_content = b""dummy data""
+
+    with patch(""builtins.open"", mock_open(read_data=file_content)):
+        result = await uploader.upload_file(
+            file_path=""/path/to/file.bin"",
+            user_id=""user123"",
+            storage_service=storage_service,
+            scanner_service=scanner_service,
+            logger=logger,
+        )
+
+    assert result == ""https://storage.example.com/file.bin""
+    scanner_service.scan.assert_awaited_once_with(ANY)
+    storage_service.store.assert_awaited_once_with(""user123"", ANY)
+    logger.info.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_upload_file_virus_detected(uploader, storage_service, scanner_service, logger):
+    scanner_service.scan.return_value = False
+    file_content = b""malicious content""
+
+    with patch(""builtins.open"", mock_open(read_data=file_content)):
+        with pytest.raises(VirusDetectedError):
+            await uploader.upload_file(
+                file_path=""/path/to/malware.bin"",
+                user_id=""user456"",
+                storage_service=storage_service,
+                scanner_service=scanner_service,
+                logger=logger,
+            )
+
+    scanner_service.scan.assert_awaited_once_with(ANY)
+    storage_service.store.assert_not_awaited()
+    logger.error.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_upload_file_file_not_found(uploader, storage_service, scanner_service, logger):
+    with patch(""builtins.open"", side_effect=FileNotFoundError):
+        with pytest.raises(FileNotFoundError):
+            await uploader.upload_file(
+                file_path=""/nonexistent/file.bin"",
+                user_id=""user789"",
+                storage_service=storage_service,
+                scanner_service=scanner_service,
+                logger=logger,
+            )
+
+    scanner_service.scan.assert_not_awaited()
+    storage_service.store.assert_not_awaited()
+    logger.error.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_upload_file_permission_error(uploader, storage_service, scanner_service, logger):
+    with patch(""builtins.open"", side_effect=PermissionError):
+        with pytest.raises(PermissionError):
+            await uploader.upload_file(
+                file_path=""/restricted/file.bin"",
+                user_id=""user000"",
+                storage_service=storage_service,
+                scanner_service=scanner_service,
+                logger=logger,
+            )
+
+    scanner_service.scan.assert_not_awaited()
+    storage_service.store.assert_not_awaited()
+    logger.error.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_upload_file_invalid_chunk_size(uploader, storage_service, scanner_service, logger):
+    with pytest.raises(ValueError):
+        await uploader.upload_file(
+            file_path=""/path/to/file.bin"",
+            user_id=""user111"",
+            storage_service=storage_service,
+            scanner_service=scanner_service,
+            logger=logger,
+            chunk_size=0,
+        )
+
+    scanner_service.scan.assert_not_awaited()
+    storage_service.store.assert_not_awaited()
+    logger.error.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_upload_file_storage_error(uploader, storage_service, scanner_service, logger):
+    storage_service.store.side_effect = StorageError(""store failed"")
+    file_content = b""valid data""
+
+    with patch(""builtins.open"", mock_open(read_data=file_content)):
+        with pytest.raises(StorageError):
+            await uploader.upload_file(
+                file_path=""/path/to/file.bin"",
+                user_id=""user222"",
+                storage_service=storage_service,
+                scanner_service=scanner_service,
+                logger=logger,
+            )
+
+    scanner_service.scan.assert_awaited_once_with(ANY)
+    storage_service.store.assert_awaited_once()
+    logger.error.assert_called()"
+"def upload_document(file_path: str, storage_client, metadata: dict = None) -> str:
+    """"""Uploads a local document to a cloud storage bucket.
+
+    Args:
+        file_path: Absolute path to the file on the local filesystem.
+        storage_client: An object exposing an ``upload_blob(bucket_name: str, blob_name: str, data: bytes, metadata: dict) -> str`` method.
+        metadata: Optional dictionary of key/value pairs to associate with the uploaded object.
+
+    Returns:
+        The public URL (str) of the uploaded document as returned by ``storage_client``.
+
+    Raises:
+        FileNotFoundError: If ``file_path`` does not exist or is not readable.
+        PermissionError: If the process lacks permissions to read the file.
+        StorageError: Propagated if ``storage_client.upload_blob`` fails.
+
+    Dependencies:
+        - storage_client: Provides ``upload_blob`` for interaction with cloud storage.
+        - logger (logging.Logger): Used to log upload attempts and failures.
+    """"""","import pytest
+from unittest.mock import Mock, patch, ANY, mock_open
+
+from document_uploader import upload_document, StorageError
+
+
+def test_upload_document_success():
+    mock_storage = Mock()
+    mock_storage.upload_blob.return_value = ""https://storage.example.com/file.pdf""
+    file_content = b""dummy data""
+
+    with patch(""builtins.open"", mock_open(read_data=file_content)) as mocked_file, \
+         patch(""document_uploader.logger"") as mock_logger:
+        result = upload_document(""/path/to/file.pdf"", mock_storage, metadata={""key"": ""value""})
+
+    assert result == ""https://storage.example.com/file.pdf""
+    mocked_file.assert_called_once_with(""/path/to/file.pdf"", ""rb"")
+    mock_storage.upload_blob.assert_called_once_with(ANY, ANY, file_content, {""key"": ""value""})
+    mock_logger.info.assert_called()
+
+
+def test_upload_document_file_not_found():
+    mock_storage = Mock()
+    with patch(""builtins.open"", side_effect=FileNotFoundError), \
+         patch(""document_uploader.logger"") as mock_logger:
+        with pytest.raises(FileNotFoundError):
+            upload_document(""/nonexistent/file.txt"", mock_storage)
+
+    mock_storage.upload_blob.assert_not_called()
+    mock_logger.error.assert_called()
+
+
+def test_upload_document_permission_error():
+    mock_storage = Mock()
+    with patch(""builtins.open"", side_effect=PermissionError), \
+         patch(""document_uploader.logger"") as mock_logger:
+        with pytest.raises(PermissionError):
+            upload_document(""/path/denied.txt"", mock_storage)
+
+    mock_storage.upload_blob.assert_not_called()
+    mock_logger.error.assert_called()
+
+
+def test_upload_document_storage_error():
+    mock_storage = Mock()
+    mock_storage.upload_blob.side_effect = StorageError(""upload failed"")
+    file_content = b""data""
+    with patch(""builtins.open"", mock_open(read_data=file_content)), \
+         patch(""document_uploader.logger"") as mock_logger:
+        with pytest.raises(StorageError):
+            upload_document(""/path/file.docx"", mock_storage)
+
+    mock_storage.upload_blob.assert_called_once_with(ANY, ANY, file_content, None)
+    mock_logger.error.assert_called()"
+"class ImageProcessor:
+    def resize_image(
+        self,
+        image_path: str,
+        size: tuple[int, int],
+        storage_service,
+        pillow,
+        logger,
+        *,
+        keep_aspect_ratio: bool = True,
+    ) -> str:
+        """"""Resizes an image file and stores the result using a storage backend.
+
+        Args:
+            image_path (str): Path to the source image file on local disk.
+            size (tuple[int, int]): Desired dimensions ``(width, height)`` in pixels.
+            storage_service: Service exposing ``save(data: bytes, filename: str) -> str`` which returns the URL of the stored file.
+            pillow: The Pillow library module providing ``Image`` class for image manipulation.
+            logger: Logger with ``info`` and ``warning`` methods.
+            keep_aspect_ratio (bool, optional): If ``True``, the image is resized preserving its original aspect ratio,
+                possibly resulting in dimensions smaller than requested. Defaults to ``True``.
+
+        Returns:
+            str: URL of the resized image as returned by ``storage_service.save``.
+
+        Raises:
+            FileNotFoundError: If ``image_path`` does not exist.
+            IOError: If the image cannot be opened or saved.
+            ValueError: If ``size`` is not a 2‑element tuple of positive integers.
+            StorageError: Propagated if ``storage_service.save`` fails.
+
+        Dependencies:
+            - storage_service: Provides ``save`` for persisting binary data.
+            - pillow (third‑party): Used for opening, resizing, and encoding images.
+            - logger: Used for logging processing steps and warnings.
+        """"""
+        ...","import pytest
+from unittest.mock import MagicMock, Mock, call, ANY
+import importlib
+
+module = importlib.import_module(""image_module"")
+ImageProcessor = getattr(module, ""ImageProcessor"")
+StorageError = getattr(module, ""StorageError"", Exception)
+
+
+@pytest.fixture
+def processor():
+    return ImageProcessor()
+
+
+@pytest.fixture
+def image_path():
+    return ""/path/to/source.jpg""
+
+
+@pytest.fixture
+def size():
+    return (200, 100)
+
+
+@pytest.fixture
+def storage_service():
+    service = MagicMock()
+    service.save.return_value = ""http://cdn.example.com/resized.jpg""
+    return service
+
+
+@pytest.fixture
+def logger():
+    return MagicMock()
+
+
+@pytest.fixture
+def pillow():
+    # Mock the Image class and its behavior
+    mock_image = MagicMock()
+    # Support context manager usage: with pillow.Image.open(...)
+    mock_image.__enter__.return_value = mock_image
+    mock_image.__exit__.return_value = None
+    # resize should return the same mock (chainable)
+    mock_image.resize.return_value = mock_image
+    # save should write to the provided buffer (do nothing)
+    mock_image.save = Mock()
+
+    pillow_mod = MagicMock()
+    pillow_mod.Image.open.return_value = mock_image
+    pillow_mod.Image = MagicMock()
+    pillow_mod.Image.open.return_value = mock_image
+    return pillow_mod
+
+
+def test_resize_image_happy_path(
+    processor,
+    image_path,
+    size,
+    storage_service,
+    pillow,
+    logger,
+):
+    result = processor.resize_image(
+        image_path=image_path,
+        size=size,
+        storage_service=storage_service,
+        pillow=pillow,
+        logger=logger,
+        keep_aspect_ratio=True,
+    )
+    assert result == ""http://cdn.example.com/resized.jpg""
+    pillow.Image.open.assert_called_once_with(image_path)
+    # resize should be called with some tuple (could be adjusted for aspect ratio)
+    pillow.Image.open.return_value.resize.assert_called_once()
+    storage_service.save.assert_called_once()
+    logger.info.assert_called()
+
+
+def test_resize_image_keep_aspect_ratio_false(
+    processor,
+    image_path,
+    size,
+    storage_service,
+    pillow,
+    logger,
+):
+    processor.resize_image(
+        image_path=image_path,
+        size=size,
+        storage_service=storage_service,
+        pillow=pillow,
+        logger=logger,
+        keep_aspect_ratio=False,
+    )
+    # When aspect ratio is not kept, the exact size tuple should be used
+    pillow.Image.open.return_value.resize.assert_called_once_with(size)
+
+
+def test_resize_image_invalid_size_raises(
+    processor,
+    image_path,
+    storage_service,
+    pillow,
+    logger,
+):
+    with pytest.raises(ValueError):
+        processor.resize_image(
+            image_path=image_path,
+            size=(100,),  # invalid tuple
+            storage_service=storage_service,
+            pillow=pillow,
+            logger=logger,
+            keep_aspect_ratio=True,
+        )
+    with pytest.raises(ValueError):
+        processor.resize_image(
+            image_path=image_path,
+            size=(-100, 200),  # negative dimension
+            storage_service=storage_service,
+            pillow=pillow,
+            logger=logger,
+            keep_aspect_ratio=True,
+        )
+    pillow.Image.open.assert_not_called()
+    storage_service.save.assert_not_called()
+    logger.warning.assert_called()
+
+
+def test_resize_image_file_not_found_raises(
+    processor,
+    image_path,
+    size,
+    storage_service,
+    pillow,
+    logger,
+):
+    pillow.Image.open.side_effect = FileNotFoundError
+    with pytest.raises(FileNotFoundError):
+        processor.resize_image(
+            image_path=image_path,
+            size=size,
+            storage_service=storage_service,
+            pillow=pillow,
+            logger=logger,
+            keep_aspect_ratio=True,
+        )
+    pillow.Image.open.assert_called_once_with(image_path)
+    storage_service.save.assert_not_called()
+    logger.warning.assert_called()
+
+
+def test_resize_image_ioerror_raises(
+    processor,
+    image_path,
+    size,
+    storage_service,
+    pillow,
+    logger,
+):
+    pillow.Image.open.side_effect = IOError
+    with pytest.raises(IOError):
+        processor.resize_image(
+            image_path=image_path,
+            size=size,
+            storage_service=storage_service,
+            pillow=pillow,
+            logger=logger,
+            keep_aspect_ratio=True,
+        )
+    pillow.Image.open.assert_called_once_with(image_path)
+    storage_service.save.assert_not_called()
+    logger.warning.assert_called()
+
+
+def test_resize_image_storage_error_propagates(
+    processor,
+    image_path,
+    size,
+    storage_service,
+    pillow,
+    logger,
+):
+    storage_service.save.side_effect = StorageError(""storage failed"")
+    with pytest.raises(StorageError):
+        processor.resize_image(
+            image_path=image_path,
+            size=size,
+            storage_service=storage_service,
+            pillow=pillow,
+            logger=logger,
+            keep_aspect_ratio=True,
+        )
+    pillow.Image.open.assert_called_once_with(image_path)
+    pillow.Image.open.return_value.resize.assert_called_once()
+    storage_service.save.assert_called_once()
+    logger.info.assert_called()"
