@@ -27,5 +27,6 @@ env/
 # Generated test output from examples — not source-controlled
 examples/generated_tests/
 
-# Claude Code local settings
-.claude/settings.local.json
+# Claude Code — ignore all local config and instructions
+.claude/
+CLAUDE.md
