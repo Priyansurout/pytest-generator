@@ -25,7 +25,7 @@ class Config:
     """Default application configuration"""
     MODEL_REPO: str = "Priyansu19/pytest-8b-GGUF"
     MODEL_FILE: str = "pytest-8b-q4_k_m.gguf"
-    N_CTX: int = 2048
+    N_CTX: int = 4096
     MAX_TOKENS: int = 3072
     TEMPERATURE: float = 0.05
     TOP_P: float = 1

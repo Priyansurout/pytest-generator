@@ -9,7 +9,7 @@ model:
 # Generation Parameters
 generation:
 
-  n_ctx: 2048
+  n_ctx: 4096
   max_tokens: 3072
   temperature: 0.05
   top_p: 0.9

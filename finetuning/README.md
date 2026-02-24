@@ -27,8 +27,8 @@ The `data/` folder contains everything needed to train the model:
 | File | Description |
 |------|-------------|
 | `job_description.json` | Task definition for pytest generation |
-| `train.jsonl` | training examples (function → test code) |
-| `test.jsonl` | evaluation examples |
+| `train.csv` | training examples (function → test code) |
+| `test.csv` | evaluation examples |
 | `config.yaml` | Training configuration (Qwen3-8B base model) |
 
 ---

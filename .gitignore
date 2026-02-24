@@ -24,8 +24,9 @@ env/
 # Model cache (auto-downloaded on first run, ~5GB)
 .cache/
 
-# Generated test output from examples — not source-controlled
-examples/generated_tests/
+# Generated test output (default output dir) — not source-controlled
+# Note: examples/generated_tests/ IS tracked (demo tests ship with repo)
+/generated_tests/
 
 # Claude Code — ignore all local config and instructions
 .claude/

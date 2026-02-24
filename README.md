@@ -213,7 +213,7 @@ Controls how tests are generated.
 
 ```yaml
 generation:
-  n_ctx: 2048              # Context window size
+  n_ctx: 4096              # Context window size
   max_tokens: 3072         # Maximum tokens per test (increase to 4096-5120 for complex files)
   temperature: 0.05        # Randomness (low = deterministic)
   top_p: 1.0              # Nucleus sampling threshold
@@ -381,6 +381,10 @@ def add(a: Union[int, float], b: Union[int, float]) -> Union[int, float]:
 
 ```python
 import pytest
+import importlib
+
+module = importlib.import_module("module")
+add = getattr(module, "add")
 
 @pytest.mark.parametrize("a,b,expected", [
     (1, 2, 3),
@@ -399,6 +403,8 @@ def test_add_type_error():
     with pytest.raises(TypeError):
         add("string", "string")
 ```
+
+*Note: `"module"` is a placeholder — the tool automatically replaces it with the actual module name (e.g., `"calculator"`).*
 
 ---
 

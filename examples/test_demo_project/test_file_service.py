@@ -2,133 +2,105 @@
 Generated tests for file_service.py
 Created by pytest-generator
 """
-# Test 1: list_log_files
 import pytest
+from unittest.mock import MagicMock
 import importlib
-from unittest.mock import Mock
-from pathlib import Path
-
 
 module = importlib.import_module("file_service")
 list_log_files = getattr(module, "list_log_files")
-FileNotFoundError = getattr(module, "FileNotFoundError", Exception)
+read_config_file = getattr(module, "read_config_file")
+create_backup = getattr(module, "create_backup")
 
 
-@pytest.fixture
-def mock_directory():
-    mock = Mock()
-    mock.glob.return_value = ["file1.log", "file2.log"]
-    return mock
+# Test 1: list_log_files
+def test_list_log_files_success():
+    directory = MagicMock()
+    directory.exists.return_value = True
+    mock_file1 = MagicMock()
+    mock_file2 = MagicMock()
+    mock_file1.__str__ = lambda self: "/logs/app.log"
+    mock_file2.__str__ = lambda self: "/logs/error.log"
+    directory.glob.return_value = [mock_file1, mock_file2]
 
+    result = list_log_files(directory)
+    assert result == ["/logs/app.log", "/logs/error.log"]
+    directory.exists.assert_called_once()
+    directory.glob.assert_called_once_with("*.log")
 
-@pytest.mark.parametrize("directory,expected_files", [
-    (Path("/var/log"), ["file1.log", "file2.log"]),
-    (Path("/tmp/logs"), ["app.log", "error.log"]),
-])
-def test_list_log_files_success(directory, expected_files):
-    mock = Mock()
-    mock.glob.return_value = expected_files
-    mock.exists.return_value = True
+def test_list_log_files_empty():
+    directory = MagicMock()
+    directory.exists.return_value = True
+    directory.glob.return_value = []
 
-    result = list_log_files(directory, mock)
-    assert result == expected_files
-    mock.glob.assert_called_once_with("*.log")
-    mock.exists.assert_called_once_with(follow_symlinks=True)
+    result = list_log_files(directory)
+    assert result == []
 
-
-def test_list_log_files_directory_does_not_exist():
-    mock = Mock()
-    mock.exists.return_value = False
+def test_list_log_files_directory_not_found():
+    directory = MagicMock()
+    directory.exists.return_value = False
 
     with pytest.raises(FileNotFoundError):
-        list_log_files(Path("/nonexistent"), mock)
-    mock.exists.assert_called_once_with(follow_symlinks=True)
+        list_log_files(directory)
+
 
 # Test 2: read_config_file
-import pytest
-import importlib
-from unittest.mock import Mock, AsyncMock
-from pathlib import Path
-import os
+def test_read_config_file_success():
+    config_path = MagicMock()
+    config_path.exists.return_value = True
+    config_path.read_text.return_value = "key: value"
 
+    result = read_config_file(config_path)
+    assert result == "key: value"
+    config_path.read_text.assert_called_once_with(encoding="utf-8")
 
-module = importlib.import_module("file_service")
-read_config_file = getattr(module, "read_config_file")
-Path = getattr(module, "Path", Path)
-os = getattr(module, "os", os)
+def test_read_config_file_not_found():
+    config_path = MagicMock()
+    config_path.exists.return_value = False
 
-
-@pytest.fixture
-def config_path():
-    return Mock(spec=Path)
-
-@pytest.fixture
-def os_mock():
-    mock = Mock()
-    mock.path = Mock()
-    mock.path.exists = Mock(return_value=True)
-    return mock
-
-@pytest.mark.parametrize("config_path_content,expected", [
-    ("config_content", "config_content"),
-    ("", None),
-    (None, None),
-])
-def test_read_config_file(config_path, os_mock, config_path_content, expected):
-    os_mock.path.exists.return_value = True
-    config_path.read_text.return_value = config_path_content
-    
-    result = read_config_file(config_path, os_mock)
-    assert result == expected
-    config_path.read_text.assert_called_once_with(encoding='utf-8', errors='strict')
-    os_mock.path.exists.assert_called_once_with(config_path)
-
-def test_read_config_file_file_does_not_exist(config_path, os_mock):
-    os_mock.path.exists.return_value = False
-    
-    result = read_config_file(config_path, os_mock)
+    result = read_config_file(config_path)
     assert result is None
-    os_mock.path.exists.assert_called_once_with(config_path)
+
 
 # Test 3: create_backup
-import pytest
-import importlib
-from unittest.mock import MagicMock
-import os
-from pathlib import Path
-
-
-module = importlib.import_module("file_service")
-create_backup = getattr(module, "create_backup")
-FileNotFoundError = getattr(module, "FileNotFoundError", Exception)
-
-
-@pytest.fixture
-def source():
-    return MagicMock(spec=Path)
-
-@pytest.fixture
-def backup_dir():
-    return MagicMock(spec=Path)
-
-
-def test_create_backup_success(source, backup_dir):
-    source.read_text.return_value = "content"
+def test_create_backup_success():
+    source = MagicMock()
     source.exists.return_value = True
-    backup_dir.exists.return_value = True
-    backup_dir.mkdir.return_value = None
+    source.name = "data.txt"
+    source.read_text.return_value = "file content"
 
-    expected_backup_path = backup_dir / "backup.txt"
+    backup_dir = MagicMock()
+    backup_dir.exists.return_value = True
+
+    backup_file = MagicMock()
+    backup_dir.__truediv__ = MagicMock(return_value=backup_file)
+
     result = create_backup(source, backup_dir)
 
-    assert result == expected_backup_path
-    source.read_text.assert_called_once_with(encoding="utf-8", errors="strict")
-    source.exists.assert_called_once_with(follow_symlinks=True)
-    backup_dir.exists.assert_called_once_with(follow_symlinks=True)
-    backup_dir.mkdir.assert_called_once_with(mode=0o777, parents=True, exist_ok=True)
+    backup_dir.__truediv__.assert_called_once_with("data.txt.backup")
+    source.read_text.assert_called_once()
+    backup_file.write_text.assert_called_once_with("file content")
+    assert result == backup_file
 
-def test_create_backup_source_does_not_exist(source, backup_dir):
+def test_create_backup_creates_dir():
+    source = MagicMock()
+    source.exists.return_value = True
+    source.name = "report.csv"
+    source.read_text.return_value = "csv data"
+
+    backup_dir = MagicMock()
+    backup_dir.exists.return_value = False
+
+    backup_file = MagicMock()
+    backup_dir.__truediv__ = MagicMock(return_value=backup_file)
+
+    create_backup(source, backup_dir)
+
+    backup_dir.mkdir.assert_called_once_with(parents=True)
+
+def test_create_backup_source_not_found():
+    source = MagicMock()
     source.exists.return_value = False
+    backup_dir = MagicMock()
 
     with pytest.raises(FileNotFoundError):
         create_backup(source, backup_dir)
