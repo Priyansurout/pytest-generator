@@ -12,6 +12,8 @@ We fine-tuned a specialized 8B language model to generate pytest test cases from
 
 **Your code never leaves your machine.**
 
+> **Note:** pytest-generator produces test skeletons (~77% accuracy on an 8B model). Generated tests are meant to be reviewed and refined by developers before use — not run as-is.
+
 ---
 
 ## Performance Results
