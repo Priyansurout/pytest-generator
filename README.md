@@ -12,7 +12,7 @@ We fine-tuned a specialized 8B language model to generate pytest test cases from
 
 **Your code never leaves your machine.**
 
-> **Note:** pytest-generator produces test skeletons (~77% accuracy on an 8B model). Generated tests are meant to be reviewed and refined by developers before use — not run as-is.
+> **Note:** pytest-generator produces test skeletons (~77% accuracy on an 8B model). Generated tests are meant to be reviewed and refined by developers before use not run as-is.
 
 ---
 
@@ -21,8 +21,8 @@ We fine-tuned a specialized 8B language model to generate pytest test cases from
 | Model | Parameters | LLM-as-a-Judge | Exact Match | Link |
 |-------|------------|----------------|-------------|------|
 | Deepseek.v3.1 (teacher) | 671B | 85% | 86% | — |
-| **Qwen3-8B (fine-tuned)** | **8B** | **72%** | **83%** | [HuggingFace](https://huggingface.co/Priyansu19/pytest-8b) |
-| Qwen3-8B Q4 (quantized) | 8B | ~65% | — | [HuggingFace](https://huggingface.co/Priyansu19/pytest-8b-GGUF) |
+| **Qwen3-8B (fine-tuned)** | **8B** | **77%** | **83%** | [HuggingFace](https://huggingface.co/Priyansu19/pytest-8b) |
+| Qwen3-8B Q4 (quantized) | 8B | ~70% | — | [HuggingFace](https://huggingface.co/Priyansu19/pytest-8b-GGUF) |
 | Qwen3-8B (base) | 8B | 15% | 36% | — |
 
 The fine-tuned **Qwen3-8B** model approaches the **671B** teacher's performance while being **80× smaller**. The Q4 quantized variant preserves most accuracy and enables efficient CPU-only local inference, making it ideal for private, on-device test generation.
