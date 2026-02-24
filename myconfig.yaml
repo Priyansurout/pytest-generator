@@ -12,7 +12,7 @@ generation:
   n_ctx: 4096
   max_tokens: 3072
   temperature: 0.05
-  top_p: 0.9
+  top_p: 1.0
   repeat_penalty: 1.0
   batch_size: 128
 

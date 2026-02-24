@@ -265,10 +265,10 @@ CRITICAL — follow exactly:
         import yaml
         
         with open(yaml_path, 'r') as f:
-            data = yaml.safe_load(f)
-        
+            data = yaml.safe_load(f) or {}
+
         config = cls()
-        
+
         if 'model' in data:
             config.MODEL_REPO = data['model'].get('repo', config.MODEL_REPO)
             config.MODEL_FILE = data['model'].get('file', config.MODEL_FILE)
@@ -1120,20 +1120,19 @@ Custom Config YAML:
     
     HardwareDetector.print_config(n_threads, total_cores)
     
+    # Validate target before downloading model
+    target_path = Path(args.target)
+    if not target_path.exists():
+        print(f"{Colors.FAIL}❌ Target not found: {args.target}{Colors.ENDC}")
+        sys.exit(1)
+
     # Setup output directory
     os.makedirs(config.DEFAULT_OUTPUT_DIR, exist_ok=True)
-    
+
     # Download and load model
     model_manager = ModelManager(config)
     model_manager.download_if_needed()
     model_manager.load(n_threads)
-    
-    # Process target
-    target_path = Path(args.target)
-    
-    if not target_path.exists():
-        print(f"{Colors.FAIL}❌ Target not found: {args.target}{Colors.ENDC}")
-        sys.exit(1)
     
     start_time = time.time()
     

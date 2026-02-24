@@ -40,23 +40,20 @@ The `data/` folder contains everything needed to train the model:
 ```python
 def calculate_discount(price: float, percentage: float) -> float:
     """Calculate discounted price.
-    
+
     Args:
         price: Original price (must be positive)
         percentage: Discount percentage 0-100
-        
+
     Returns:
         Discounted price
-        
+
     Raises:
         ValueError: If price is negative or percentage invalid
     """
-    if price < 0:
-        raise ValueError("Price cannot be negative")
-    if not (0 <= percentage <= 100):
-        raise ValueError("Percentage must be between 0 and 100")
-    return price * (1 - percentage / 100)
 ```
+
+> **Note:** The model only sees the function signature + docstring. The body is stripped at inference time by the AST extractor.
 
 **Output:**
 
@@ -155,7 +152,7 @@ distil model download <model-id>
 
 The training uses:
 
-- **Base model:** Qwen3-8B-Instruct (student)
+- **Base model:** Qwen3-8B (student)
 - **Teacher model:** Deepseek.v3.1
 - **Task type:** Question-answering
 
