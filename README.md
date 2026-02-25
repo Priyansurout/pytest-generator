@@ -51,13 +51,10 @@ pip install -r requirements.txt
 
 ### 3. Download the Model
 
-**Auto-download (recommended)**
-
-The model is automatically downloaded on first run (~5GB).
-
-**Manual download**
+The model (~5GB) is auto-downloaded on first run, but you can pre-download it to avoid a silent wait:
 
 ```bash
+# ~5GB, takes a few minutes
 python -c "from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='Priyansu19/pytest-8b-GGUF', filename='pytest-8b-q4_k_m.gguf', local_dir='.')"
 ```
 
