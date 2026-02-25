@@ -786,6 +786,20 @@ class TestWriter:
         return code
 
     @staticmethod
+    def ensure_conftest(output_dir: str, source_file: str):
+        """Generate a conftest.py that adds the source directory to sys.path."""
+        conftest_path = os.path.join(output_dir, "conftest.py")
+        if os.path.exists(conftest_path):
+            return
+        source_dir = os.path.abspath(os.path.dirname(source_file))
+        with open(conftest_path, 'w', encoding='utf-8') as f:
+            f.write(
+                "import sys\n"
+                "import os\n\n"
+                f'sys.path.insert(0, os.path.abspath("{source_dir}"))\n'
+            )
+
+    @staticmethod
     def _ensure_async_imports(code: str) -> str:
         """Ensure AsyncMock import is present when AsyncMock is used in code."""
         if 'AsyncMock' not in code:
@@ -968,7 +982,8 @@ def process_file(file_path: str, model_manager: ModelManager, output_dir: str, c
     output_path = os.path.join(output_dir, output_name)
     
     TestWriter.write(generated_tests, output_path, file_path)
-    
+    TestWriter.ensure_conftest(output_dir, file_path)
+
     avg_time = total_time / len(functions)
     print(f"{Colors.GREEN}{Colors.BOLD}✅ Created: {output_path}{Colors.ENDC}")
     print(f"{Colors.CYAN}   Total: {total_time:.1f}s | Average: {avg_time:.1f}s per function{Colors.ENDC}")
