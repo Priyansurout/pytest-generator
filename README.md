@@ -90,6 +90,18 @@ python pytest_generator.py ./src/ -o ./tests/
 python pytest_generator.py app.py myconfig.yaml
 ```
 
+### 5. Run Generated Tests
+
+Generated tests use `importlib.import_module("calculator")` to import the source module, so the module must be importable from wherever you run pytest. The simplest approach:
+
+```bash
+# Run from the directory containing your source file
+cd /path/to/your/source/
+PYTHONPATH=. pytest generated_tests/
+```
+
+For async tests (`@pytest.mark.asyncio`), `pytest-asyncio` is included in `requirements.txt`.
+
 ---
 
 ## Dependency-Aware Mock Generation

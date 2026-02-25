@@ -761,6 +761,7 @@ class TestWriter:
 
         for i, test in enumerate(tests, 1):
             code = TestWriter._replace_module_name(test['code'], source_name)
+            code = TestWriter._ensure_async_imports(code)
             lines.append(f"# Test {i}: {test['function_name']}")
             lines.append(code)
             lines.append('')
@@ -782,6 +783,22 @@ class TestWriter:
         # @patch strings: @patch('module.X') / @patch("module.X")
         code = code.replace("@patch('module.", f"@patch('{module_name}.")
         code = code.replace('@patch("module.', f'@patch("{module_name}.')
+        return code
+
+    @staticmethod
+    def _ensure_async_imports(code: str) -> str:
+        """Ensure AsyncMock import is present when AsyncMock is used in code."""
+        if 'AsyncMock' not in code:
+            return code
+        # Check if AsyncMock is already imported
+        if re.search(r'from\s+unittest\.mock\s+import\s+.*AsyncMock', code):
+            return code
+        # Find existing unittest.mock import to extend
+        match = re.search(r'(from\s+unittest\.mock\s+import\s+)(.+)', code)
+        if match:
+            code = code.replace(match.group(0), f"{match.group(1)}{match.group(2)}, AsyncMock")
+        else:
+            code = "from unittest.mock import AsyncMock\n" + code
         return code
 
 

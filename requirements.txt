@@ -4,4 +4,5 @@ huggingface-hub
 pyyaml
 psutil
 pytest
+pytest-asyncio
 black
