@@ -104,9 +104,13 @@ When generating tests for real-world code, an LLM needs to know **what methods e
 
 pytest-generator solves this using a **two-stage hybrid approach**:
 
-### Stage 1: Local Project Scan (AST)
+### Stage 1: Runtime Inspection (importlib + inspect)
 
-On startup, the tool scans your project directory using Python's `ast` module and builds an index of every class and its methods. This works for any `.py` file in your project **without executing any code**.
+For classes imported from **pip-installed packages** (e.g., `httpx`, `requests`, `pathlib`), the tool imports the module at runtime and uses `inspect.signature()` to get the real method names **and argument names**. This is the primary resolution method and runs first.
+
+### Stage 2: Local Project Scan (AST Fallback)
+
+For classes that runtime inspection can't resolve (local project classes, uninstalled packages), the tool falls back to scanning your project directory using Python's `ast` module. It builds an index of every class and its methods **without executing any code**.
 
 ```bash
 # Scan a specific directory (default: auto-detect project root)
@@ -121,10 +125,6 @@ python pytest_generator.py app.py --load-index /tmp/index.json
 # Disable dependency resolution entirely (fastest, pre-v2 behavior)
 python pytest_generator.py app.py --no-index
 ```
-
-### Stage 2: Runtime Inspection (importlib + inspect)
-
-For classes imported from **pip-installed packages** (e.g., `httpx`, `requests`, `pathlib`), the tool imports the module at runtime and uses `inspect.signature()` to get the real method names **and argument names**.
 
 **Example source file:**
 
