@@ -27,7 +27,7 @@ We fine-tuned a specialized 8B language model to generate pytest test cases from
 
 The fine-tuned **Qwen3-8B** model approaches the **671B** teacher's performance while being **80× smaller**. The Q4 quantized variant preserves most accuracy and enables efficient CPU-only local inference, making it ideal for private, on-device test generation.
 
-**Dependency Resolution Improvement:**
+**Dependency Resolution Improvement** (before → after adding dependency resolution):
 - Method name hallucination: 67% → 3% (-96%)
 - Test pass rate: 33% → 97% (+194%)
 - Method name accuracy: **100%** for both pip packages and local classes
@@ -89,19 +89,19 @@ python pytest_generator.py app.py myconfig.yaml
 
 ### 5. Run Generated Tests
 
-A `conftest.py` is auto-generated in the output directory that adds the source module's path to `sys.path`, so tests work out of the box:
+After reviewing and refining the generated tests, run them with:
 
 ```bash
 pytest generated_tests/
 ```
 
-For async tests (`@pytest.mark.asyncio`), `pytest-asyncio` is included in `requirements.txt`.
+A `conftest.py` is auto-generated in the output directory that adds the source module's path to `sys.path`, so imports resolve correctly. For async tests (`@pytest.mark.asyncio`), `pytest-asyncio` is included in `requirements.txt`.
 
 ---
 
 ## Dependency-Aware Mock Generation
 
-One of the hardest parts of writing tests for real-world code is knowing **exactly what methods to mock**. Without this information, LLMs hallucinate method names that don't exist, generating tests that fail immediately.
+When generating tests for real-world code, an LLM needs to know **what methods exist** on injected dependencies. Without access to the project structure and installed packages, models hallucinate method names, generating tests that fail immediately.
 
 pytest-generator solves this using a **two-stage hybrid approach**:
 
@@ -185,7 +185,7 @@ The model uses the **real method names and argument signatures** — no hallucin
 
 #### Model Limitations (8B Size)
 
-The 8B model occasionally generates tests with minor issues:
+The 8B model occasionally generates tests with issues that require developer correction:
 
 - **Wrong parameter counts:** May pass 2 parameters to a 1-parameter function
 - **Instantiation instead of mocking:** May try `User()` instead of `MagicMock(spec=User)`
@@ -321,7 +321,7 @@ Existing AI-based solutions usually rely on cloud APIs, require sending source c
 We wanted a solution that:
 
 - **Runs locally** — No API calls, works fully offline, keeps code private
-- **Is practical on developer machines** — Runs on CPU with a single GGUF model
+- **Is practical on developer machines** — Runs on CPU via `llama.cpp` (through `llama-cpp-python`) with a single GGUF model
 - **Produces usable tests** — Structured pytest skeletons that developers can easily refine
 - **Scales down well** — Works with quantized models without large quality loss
 
@@ -479,9 +479,7 @@ For more details, visit the [Distil Labs documentation](https://docs.distillabs.
 
 ### Q: Why not just use GPT-4 or Claude for this?
 
-Because your code shouldn't leave your machine.
-
-pytest-generator runs locally, works offline, and keeps everything private. No API keys, no rate limits, no usage costs, no data leakage.
+Some codebases can't leave the machine due to privacy, compliance, or security requirements. pytest-generator runs locally, works offline, and keeps everything on-device. No API keys, no rate limits, no usage costs.
 
 ---
 
@@ -521,9 +519,9 @@ def upload_file(s3_client: S3Client, ...):
 
 ---
 
-### Q: What is `config.yaml` used for?
+### Q: How do I customize the configuration?
 
-`config.yaml` allows you to customize pytest-generator's behavior without changing code.
+You can pass a YAML config file as a second argument (e.g., `python pytest_generator.py app.py myconfig.yaml`).
 
 It controls:
 - Which model is used
@@ -531,7 +529,7 @@ It controls:
 - Hardware usage (CPU threads)
 - Output location
 
-If `config.yaml` is missing, pytest-generator runs with sensible defaults.
+Without a config file, pytest-generator uses sensible defaults. See the Configuration section above for all options.
 
 ---
 
@@ -564,26 +562,6 @@ Yes — that's the point.
 - **Privacy-first** — No data ever leaves your device
 - **Fast** — Local inference on CPU
 - **Free** — No API costs or rate limits
-
----
-
-### Q: The generated tests aren't perfect. Is that expected?
-
-Yes. pytest-generator produces **test skeletons**, not final production tests.
-
-The goal is to:
-- Cover happy paths and edge cases
-- Reflect docstring intent
-- Generate runnable pytest code
-
-You're expected to review and refine the output — but starting from a strong baseline instead of a blank file.
-
-**Known model limitations (8B size):**
-- May generate wrong parameter counts (~23% of tests)
-- Method names are always correct (100% accuracy)
-- Overall test quality: ~77%
-
-If you see consistent issues, please open an issue with an example.
 
 ---
 

@@ -791,12 +791,16 @@ class TestWriter:
         conftest_path = os.path.join(output_dir, "conftest.py")
         if os.path.exists(conftest_path):
             return
-        source_dir = os.path.abspath(os.path.dirname(source_file))
+        source_dir = os.path.relpath(
+            os.path.abspath(os.path.dirname(source_file)),
+            os.path.abspath(output_dir),
+        )
         with open(conftest_path, 'w', encoding='utf-8') as f:
             f.write(
                 "import sys\n"
                 "import os\n\n"
-                f'sys.path.insert(0, os.path.abspath("{source_dir}"))\n'
+                "sys.path.insert(0, os.path.join("
+                f'os.path.dirname(__file__), "{source_dir}"))\n'
             )
 
     @staticmethod
