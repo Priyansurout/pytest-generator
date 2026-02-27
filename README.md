@@ -31,8 +31,6 @@ The fine-tuned **Qwen3-8B** model approaches the **671B** teacher's performance 
 - Method name hallucination: 67% → 3% (-96%)
 - Test pass rate: 33% → 97% (+194%)
 
-With dependency resolution enabled, method name accuracy is **100%** for both pip packages and local classes.
-
 ---
 
 ## Quick Start
@@ -193,7 +191,7 @@ The 8B model occasionally generates tests with issues that require developer cor
 - **Scope issues:** May use variables outside fixture scope
 - **Incomplete tests:** May cut off if token limit (3072) is reached
 
-**Overall quality:** ~77% (method names 100% accurate, usage sometimes needs adjustment)
+**Overall quality:** ~77% (usage sometimes needs adjustment)
 
 **Recommendation:** Always review generated tests before committing. The tool produces high-quality test skeletons that may need minor refinement.
 
