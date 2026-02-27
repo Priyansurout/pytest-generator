@@ -30,7 +30,8 @@ The fine-tuned **Qwen3-8B** model approaches the **671B** teacher's performance 
 **Dependency Resolution Improvement** (before → after adding dependency resolution):
 - Method name hallucination: 67% → 3% (-96%)
 - Test pass rate: 33% → 97% (+194%)
-- Method name accuracy: **100%** for both pip packages and local classes
+
+With dependency resolution enabled, method name accuracy is **100%** for both pip packages and local classes.
 
 ---
 
