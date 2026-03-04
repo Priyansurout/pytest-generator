@@ -2,7 +2,7 @@
 # Model Settings
 model:
 
-  repo: "Priyansu19/pytest-8b-GGUF"
+  repo: "distil-labs/pytest-8b-GGUF"
   
   file: "pytest-8b-q4_k_m.gguf"
 

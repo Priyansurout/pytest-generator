@@ -23,7 +23,7 @@ from dataclasses import dataclass
 @dataclass
 class Config:
     """Default application configuration"""
-    MODEL_REPO: str = "Priyansu19/pytest-8b-GGUF"
+    MODEL_REPO: str = "distil-labs/pytest-8b-GGUF"
     MODEL_FILE: str = "pytest-8b-q4_k_m.gguf"
     N_CTX: int = 4096
     MAX_TOKENS: int = 3072

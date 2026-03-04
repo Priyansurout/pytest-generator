@@ -21,8 +21,8 @@ We fine-tuned a specialized 8B language model to generate pytest test cases from
 | Model | Parameters | LLM-as-a-Judge | Exact Match | Link |
 |-------|------------|----------------|-------------|------|
 | Deepseek.v3.1 (teacher) | 671B | 85% | 86% | — |
-| **Qwen3-8B (fine-tuned)** | **8B** | **77%** | **83%** | [HuggingFace](https://huggingface.co/Priyansu19/pytest-8b) |
-| Qwen3-8B Q4 (quantized) | 8B | ~70% | — | [HuggingFace](https://huggingface.co/Priyansu19/pytest-8b-GGUF) |
+| **Qwen3-8B (fine-tuned)** | **8B** | **77%** | **83%** | [HuggingFace](https://huggingface.co/distil-labs/pytest-8b) |
+| Qwen3-8B Q4 (quantized) | 8B | ~70% | — | [HuggingFace](https://huggingface.co/distil-labs/pytest-8b-GGUF) |
 | Qwen3-8B (base) | 8B | 15% | 36% | — |
 
 The fine-tuned **Qwen3-8B** model approaches the **671B** teacher's performance while being **80× smaller**. The Q4 quantized variant preserves most accuracy and enables efficient CPU-only local inference, making it ideal for private, on-device test generation.
@@ -54,7 +54,7 @@ The model (~5GB) is auto-downloaded on first run, but you can pre-download it to
 
 ```bash
 # ~5GB, takes a few minutes
-python -c "from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='Priyansu19/pytest-8b-GGUF', filename='pytest-8b-q4_k_m.gguf', local_dir='.')"
+python -c "from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='distil-labs/pytest-8b-GGUF', filename='pytest-8b-q4_k_m.gguf', local_dir='.')"
 ```
 
 ### 4. Generate Tests
@@ -207,7 +207,7 @@ Controls which local GGUF model is used.
 
 ```yaml
 model:
-  repo: Priyansu19/pytest-8b-GGUF  # HuggingFace repository
+  repo: distil-labs/pytest-8b-GGUF  # HuggingFace repository
   file: pytest-8b-q4_k_m.gguf      # Model file to load
 ```
 
